@@ -2,11 +2,18 @@ SHELL := bash
 .SHELLFLAGS := -euo pipefail -c
 .DEFAULT_GOAL := help
 
-# The Rust build goes to build/target, where the image takes the service's binary from (image/Dockerfile).
-export CARGO_TARGET_DIR := $(CURDIR)/build/target
-CLIENT := client
-PNPM := pnpm --dir $(CLIENT)
-SHELL_FILES = $(shell git ls-files '*.sh')
+# Golden path project-base (EMIT ADR-0006), as tutti has it. The project's targets are in mk/project.mk. Targets use
+# `::`, so every file can extend them; `sbom` and `dist` extend through their hooks.
+PROJECT := annotate
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.0.0)
+SHELL_FILES = $(shell git ls-files '*.sh' '*.bash')
+
+# SBOM (EMIT ADR-0005, sbom-generation). What ships is built in dist-build::, described in sbom-build:: and named in
+# SBOM_DELIVERED; these must pass every required BSI TR-03183-2 field.
+SBOM := build/sbom.cdx.json
+SBOM_CREATOR := Andreas Hoch
+SBOM_CONTACT := security@emit-gmbh.de
+SBOM_DELIVERED ?=
 
 # Quiet on success, full output on failure; V=1 shows everything.
 ifeq ($(V),1)
@@ -15,50 +22,69 @@ else
 run = @log=$$(mktemp); if ! ( $(2) ) >"$$log" 2>&1; then echo "FAIL $(1)"; cat "$$log"; rm -f "$$log"; exit 1; fi; rm -f "$$log"
 endif
 
-help: ## Show targets
-	@grep -hE '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '!seen[$$1]++ {printf "  %-18s %s\n", $$1, $$2}'
+help:: ## Show targets
+	@grep -hE '^[a-z0-9-]+::?.*## ' $(MAKEFILE_LIST) | awk -F'::?.*## ' '!seen[$$1]++ {printf "  %-10s %s\n", $$1, $$2}'
 
-setup: ## Install the pinned tools and the client's packages
+setup:: ## Install the pinned tools
 	$(call run,mise,mise install)
-	$(call run,pnpm,$(PNPM) install --frozen-lockfile)
 
-fmt: ## Format all sources
-	$(call run,rustfmt,cargo fmt --all)
-	$(call run,prettier,$(PNPM) run fmt)
+fmt:: ## Format all sources
+	$(call run,shfmt,$(if $(SHELL_FILES),shfmt -w $(SHELL_FILES),true))
 
-lint: ## Check formatting, static analysis, types and dependencies
-	$(call run,rustfmt,cargo fmt --all --check)
-	$(call run,clippy,cargo clippy --workspace --all-targets --locked -- -D warnings)
-	$(call run,cargo-deny,cargo deny check)
-	$(call run,tsc,$(PNPM) run check)
-	$(call run,eslint,$(PNPM) run lint)
-	$(call run,bash,$(if $(SHELL_FILES),bash -n $(SHELL_FILES),true))
+lint:: ## Check formatting, static analysis and secrets
+	$(call run,shfmt,$(if $(SHELL_FILES),shfmt -d $(SHELL_FILES),true))
+	$(call run,shellcheck,$(if $(SHELL_FILES),shellcheck $(SHELL_FILES),true))
+	$(call run,gitleaks,gitleaks git --no-banner --redact .)
 
-test: ## Run the unit and integration tests: the model, the service and its OpenAPI document, the client and the CLI
-	$(call run,cargo-test,cargo test --workspace --locked)
-	$(call run,vitest,$(PNPM) run test)
-	$(call run,cli,cargo build --locked -p annotations-server && scripts/test-cli.sh)
+# syft leaves out the creator and does not link the root to the top-level components.
+define SBOM_META
+.metadata.manufacturer = {name: $$name, contact: [{email: $$email}]}
+| .metadata.component.type = "application"
+| .metadata.component["bom-ref"] as $$root
+| ([.components[]?["bom-ref"]] - [.dependencies[]?.dependsOn[]?]) as $$top
+| .dependencies = [{ref: $$root, dependsOn: ([.dependencies[]? | select(.ref == $$root) | .dependsOn[]?] + $$top | unique)}]
+	+ [.dependencies[]? | select(.ref != $$root)]
+| .compositions = [{aggregate: "unknown", dependencies: [.dependencies[].ref]}]
+endef
 
-build: ## Build the service's release binary and the client's bundles
-	$(call run,cargo-build,cargo build --release --locked -p annotations-server)
-	$(call run,client,$(PNPM) run build)
+# Fails with the missing fields of the SBOM itself and of SBOM_DELIVERED, and on SBOM_DELIVERED ids that match
+# no component. Without components there is no dependency graph to rate.
+define SBOM_GATE
+(["SBOM"] + ($$ids | split(" ") | map(select(. != "")))) as $$strict
+| [.sections[] | select(.required and .score < 10 and (.element_id as $$e | $$strict | index($$e)))
+	| select($$components > 0 or .section_data_field != "dependency graph completeness")
+	| "missing in \(.element_id): \(.section_data_field)"]
+	+ ($$strict - [.sections[].element_id] | map("not in the SBOM: \(.)"))
+| if length == 0 then true else join("\n") + "\n" | halt_error(1) end
+endef
+export SBOM_META SBOM_GATE
 
-e2e: ## Run the client's end-to-end tests in Chromium against the demo pages, under a strict CSP
-	$(call run,client,$(PNPM) run build)
-	$(call run,playwright,$(PNPM) run e2e)
+sbom-build::
+	$(call run,syft,mkdir -p build && syft scan dir:. -q --select-catalogers -file --select-catalogers -github-actions \
+		--exclude './build' --exclude './client/node_modules' --source-name $(PROJECT) --source-version $(VERSION) \
+		--source-supplier '$(SBOM_CREATOR)' -o cyclonedx-json=build/sbom.raw.json)
+	$(call run,sbom-meta,jq --arg name '$(SBOM_CREATOR)' --arg email '$(SBOM_CONTACT)' "$$SBOM_META" build/sbom.raw.json >$(SBOM))
 
-verify: lint test ## The checks before a commit
+sbom: sbom-build ## Write the CycloneDX SBOM to build/sbom.cdx.json and check it
+	$(call run,cyclonedx,cyclonedx validate --input-file $(SBOM) --fail-on-errors)
+	$(call run,sbomqs,sbomqs compliance --bsi-v21 --json $(SBOM) >build/sbom-bsi.json \
+		&& jq -e --arg ids '$(SBOM_DELIVERED)' --argjson components "$$(jq '.components // [] | length' $(SBOM))" \
+		"$$SBOM_GATE" build/sbom-bsi.json)
 
-ci: verify build e2e ## Every check, before a pull request
+audit:: sbom ## Fail on known high or critical vulnerabilities
+	$(call run,grype,grype sbom:$(SBOM) --by-cve --fail-on high)
 
-openapi: ## Write openapi.json anew from the service's code
-	$(call run,openapi,UPDATE_OPENAPI=1 cargo test --locked -p annotations-server --test openapi)
+dist-build::
+	@mkdir -p build/dist
 
-image: build ## Build the service's image (needs Docker): annotate-server:local
-	docker build -f image/Dockerfile -t annotate-server:local \
-		--build-arg VERSION=$$(git describe --tags --always) --build-arg REVISION=$$(git rev-parse HEAD) .
+dist: dist-build sbom ## Write the release assets with their SBOM and checksums to build/dist/
+	$(call run,dist,cp $(SBOM) build/dist/$(PROJECT)-$(VERSION).cdx.json \
+		&& cd build/dist && rm -f SHA256SUMS && sha256sum -- * >SHA256SUMS)
 
-clean: ## Remove build output
-	$(call run,clean,rm -rf build $(CLIENT)/dist)
+ci:: lint audit ## Every check, before a pull request
 
-.PHONY: help setup fmt lint test build e2e verify ci openapi image clean
+clean:: ## Remove build output
+	$(call run,clean,rm -rf build)
+
+.PHONY: help setup fmt lint sbom-build sbom audit dist-build dist ci clean
+include $(sort $(wildcard mk/*.mk))

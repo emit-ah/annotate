@@ -1,0 +1,6 @@
+# The dev container's image needs only the tool pins and the client's lock file.
+*
+!mise.toml
+!rust-toolchain.toml
+!client/package.json
+!client/pnpm-lock.yaml

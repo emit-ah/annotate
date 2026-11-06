@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the CLI (mk/annotations.mk) against the service built in build/target: lists, fetches and answers an
+# Runs the CLI (cli/annotations.mk) against the service built in build/target: lists, fetches and answers an
 # annotation with a context and a console, and checks that what callers and annotations bring can neither run
 # commands nor steer the terminal.
 set -euo pipefail
@@ -42,7 +42,7 @@ id=$(curl --silent --fail -H 'content-type: application/json' --data "$body" \
 	"http://127.0.0.1:$port/api/v1/annotations" | jq -r .id)
 
 mk() {
-	make --no-print-directory -C "$work" -f "$root/mk/annotations.mk" ANNOTATIONS_APP=demo \
+	make --no-print-directory -C "$work" -f "$root/cli/annotations.mk" ANNOTATIONS_APP=demo \
 		ANNOTATIONS_URL="http://127.0.0.1:$port" ANNOTATIONS_NETRC=/nonexistent "$@"
 }
 
@@ -75,9 +75,10 @@ refused annotation ID=$missing
 answered=$(NOTE='Lighter now.' mk annotation-status ID="$id" STATUS=done COMMIT=5c1e9a2)
 [[ $answered == "$id  done  5c1e9a2  Lighter now." ]] || fail "the answer reads $answered"
 # A note with make's functions in it stays text, also under a shell that refuses unset variables.
-mk annotation-status ID="$id" STATUS=in_progress NOTE='$(shell touch pwned)' >/dev/null
+injection="\$(shell touch pwned)"
+mk annotation-status ID="$id" STATUS=in_progress NOTE="$injection" >/dev/null
 [[ ! -e $work/pwned ]] || fail "NOTE ran a command"
-jq -e '.answer == "$(shell touch pwned)"' <(curl --silent "http://127.0.0.1:$port/api/v1/annotations/$id") >/dev/null ||
+curl --silent "http://127.0.0.1:$port/api/v1/annotations/$id" | jq -e --arg note "$injection" '.answer == $note' >/dev/null ||
 	fail "the note did not arrive as written"
 mk annotation-status ID="$id" STATUS=done SHELL='/bin/sh' .SHELLFLAGS='-u -c' >/dev/null
 [[ -z $(mk annotations) ]] || fail "an annotation done is still listed as open"
