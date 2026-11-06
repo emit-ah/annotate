@@ -1,6 +1,6 @@
 # ADR-0001: annotate as a standalone project
 
-Status: accepted (2026-11-06)
+Status: accepted (2026-11-06), amended (2026-11-06): runtime context
 
 ## Context
 
@@ -22,6 +22,9 @@ Status: accepted (2026-11-06)
 - The owner made one requirement binding the same day: annotate works in every web project, whatever language or
   framework builds it. That includes Rust/Dioxus or other WASM (tutti), Svelte (Mappa), React and plain
   server-rendered HTML.
+- Later that day the owner added a second binding requirement: annotations carry runtime context, what the app
+  hands over as the user saves (Mappa: the trace of its last AI turns) and what the browser's console and network
+  said before.
 
 ## Decision
 
@@ -49,6 +52,27 @@ Status: accepted (2026-11-06)
     through CSSOM, as tutti does;
   - no `eval`, no external assets;
   - a host needs its script source, `connect-src` for its own `/api`, and `img-src blob:` for the crop preview.
+
+### Core requirement: runtime context
+
+- **The app's context.** As the user saves, the client calls the `context` hook, which any language registers
+  through `window.annotate.register('context', fn)`. It returns any JSON:
+  - the client checks that it is JSON and replaces one larger than `MAX_CONTEXT_BYTES` (256 KiB) with a note of its
+    size;
+  - the service refuses a larger one again (422), keeps it in its own column and serves it as
+    `/api/v1/annotations/{id}/context.json`;
+  - the CLI writes it to `local/annotations/<id>/context.json`.
+  The app decides what it holds and redacts it. Mappa sends full traces only from its demo, and from a real vault
+  redacted ones: tool names, reasons, fields and timings, no card content. The app's debug log stays in the app;
+  annotate carries only what the app hands it.
+- **The console.** Without the app doing anything, the client keeps a ring of the latest `MAX_CONSOLE` (50)
+  entries:
+  - `console.error` and `console.warn`, uncaught errors and unhandled rejections, with their stack traces;
+  - failed `fetch` and `XMLHttpRequest` calls, by method, address without its query, and status.
+  Messages are cut at 2,000 characters and stacks at 4,000. Each annotation carries them as `console`, served as
+  `console.json`. `<meta name="annotate-console" content="off">` or `configure({console: false})` turns it off.
+- Both are untrusted data, as comments are; the CLI strips control characters from what it prints. Both count
+  toward the database's 1 GiB, which a full database answers with 507 rather than a failure.
 
 ### The parts
 
@@ -81,7 +105,7 @@ Status: accepted (2026-11-06)
 - **The CLI**: `mk/annotations.mk`, a Makefile include that a project copies or includes. It needs only curl and
   jq, and is taken over from tutti's `mk/annotations.mk`:
   - `make annotations` lists the open annotations of the project's app;
-  - `make annotation ID=<id>` fetches one with its pictures into `local/annotations/<id>/`;
+  - `make annotation ID=<id>` fetches one with its pictures, context and console into `local/annotations/<id>/`;
   - `make annotation-status ID=<id> STATUS=done COMMIT=<sha> NOTE=<answer>` answers one;
   - control characters in untrusted text are stripped before they reach the terminal.
 
@@ -97,6 +121,7 @@ The host app may register these; each has a zero-JS default.
 | `state()` | the view's state as name and value pairs | the `data-annotate-state` attributes on the page |
 | `redact(record)` | the record to keep, changed as the app wants, or `null` to deny it | the record as `data-annotate-redact` and `data-annotate-private` left it |
 | `pictures()` | whether pictures may be taken at all | `true` |
+| `context()` | JSON the app attaches as the user saves, such as a trace of its last steps | none |
 
 - Hooks run with a time limit. A hook that throws or times out counts as absent, except `redact` and
   `pictures`, which fail closed: the annotation is not kept, or no pictures are taken.
