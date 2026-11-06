@@ -129,7 +129,10 @@ textarea {
 
 /** The mode's stylesheet, where the browser constructs stylesheets; none where it does not, as in some test DOMs. */
 export function styleSheet(): CSSStyleSheet | undefined {
-  if (typeof CSSStyleSheet === 'undefined' || typeof CSSStyleSheet.prototype.replaceSync !== 'function') {
+  if (
+    typeof CSSStyleSheet === "undefined" ||
+    typeof CSSStyleSheet.prototype.replaceSync !== "function"
+  ) {
     return undefined;
   }
   const sheet = new CSSStyleSheet();

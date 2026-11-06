@@ -2,30 +2,31 @@
 // pin, the frame of a drag, the numbered pins, the comment's popover and the list. All lie in one layer in the
 // mode's shadow root, which takes no pointer itself; their places come through CSSOM.
 
-import { anchor, rectOf } from './describe';
-import { Bar } from './bar';
-import { button, focus, h, place, placeAt, setText } from './dom';
-import type { MessageKey } from './messages';
-import type { Mode } from './mode';
-import { COMMENT, itemId, list, popover } from './panels';
-import { between, spread, type Point } from './place';
-import { bodyOf, dragging, type Draft, type Unable } from './state';
+import { anchor, rectOf } from "./describe";
+import { Bar } from "./bar";
+import { button, focus, h, place, placeAt, setText } from "./dom";
+import type { MessageKey } from "./messages";
+import type { Mode } from "./mode";
+import { COMMENT, itemId, list, popover } from "./panels";
+import { between, spread, type Point } from "./place";
+import { bodyOf, dragging, type Draft, type Unable } from "./state";
 
 /** A pin's size in CSS pixels, 24 as WCAG 2.5.8 asks, and the room between pins. */
 const PIN = 24;
 const PIN_GAP = 4;
 
 /** The room the page keeps at its end for the bar while the mode is on. */
-const BAR_ROOM = '6rem';
+const BAR_ROOM = "6rem";
 
-const PROMPT_TITLE = 'annotate-prompt-title';
+const PROMPT_TITLE = "annotate-prompt-title";
 
 /** What the question says where the mode keeps nothing. */
 const UNABLE_TEXTS: Readonly<Record<Unable, MessageKey>> = {
-  'no-app': 'noApp',
-  'no-version': 'noVersion',
-  'no-service': 'noService',
-  'not-now': 'notNow',
+  "no-app": "noApp",
+  "no-version": "noVersion",
+  "no-service": "noService",
+  "not-now": "notNow",
+  "foreign-endpoint": "foreignEndpoint",
 };
 
 /** The mode's layer, which shows `mode`'s state in `root`. */
@@ -37,7 +38,7 @@ export class Overlay {
   private readonly pins: HTMLDivElement;
   private bar: Bar | undefined;
   private prompt: { key: string; element: HTMLDialogElement } | undefined;
-  private draft: { shown: Draft['target']; element: HTMLElement } | undefined;
+  private draft: { shown: Draft["target"]; element: HTMLElement } | undefined;
   private panel: { shown: unknown; element: HTMLElement } | undefined;
   private room = false;
   private rendering = false;
@@ -48,10 +49,17 @@ export class Overlay {
     root: ShadowRoot,
   ) {
     this.document = root.ownerDocument;
-    this.status = h(this.document, 'p', { role: 'status', class: 'sr-only' });
-    this.marks = h(this.document, 'div');
-    this.pins = h(this.document, 'div');
-    this.layer = h(this.document, 'div', { class: 'layer' }, this.status, this.marks, this.pins);
+    this.status = h(this.document, "p", { role: "status", class: "sr-only" });
+    this.marks = h(this.document, "div");
+    this.pins = h(this.document, "div");
+    this.layer = h(
+      this.document,
+      "div",
+      { class: "layer" },
+      this.status,
+      this.marks,
+      this.pins,
+    );
     root.appendChild(this.layer);
   }
 
@@ -74,8 +82,8 @@ export class Overlay {
 
   private renderOnce(): void {
     const { state } = this.mode;
-    const on = state.stage !== 'off';
-    this.layer.classList.toggle('hidden', state.hidden);
+    const on = state.stage !== "off";
+    this.layer.classList.toggle("hidden", state.hidden);
     setText(this.status, state.said);
     this.setRoom(on);
     this.renderMarks();
@@ -95,11 +103,11 @@ export class Overlay {
     this.room = on;
     const { documentElement, body } = this.document;
     if (on) {
-      documentElement.style.setProperty('scroll-padding-bottom', BAR_ROOM);
-      body.style.setProperty('padding-bottom', BAR_ROOM);
+      documentElement.style.setProperty("scroll-padding-bottom", BAR_ROOM);
+      body.style.setProperty("padding-bottom", BAR_ROOM);
     } else {
-      documentElement.style.removeProperty('scroll-padding-bottom');
-      body.style.removeProperty('padding-bottom');
+      documentElement.style.removeProperty("scroll-padding-bottom");
+      body.style.removeProperty("padding-bottom");
     }
   }
 
@@ -107,30 +115,40 @@ export class Overlay {
   private renderMarks(): void {
     const { hover, drag, corners, draft, stage } = this.mode.state;
     const frames: HTMLElement[] = [];
-    const frame = (rect: Parameters<typeof placeAt>[1], kind: string, label: string | undefined): void => {
+    const frame = (
+      rect: Parameters<typeof placeAt>[1],
+      kind: string,
+      label: string | undefined,
+    ): void => {
       const element = h(
         this.document,
-        'div',
+        "div",
         { class: `frame ${kind}` },
-        label !== undefined && h(this.document, 'span', { class: 'frame-label' }, label),
+        label !== undefined &&
+          h(this.document, "span", { class: "frame-label" }, label),
       );
       placeAt(element, rect);
       frames.push(element);
     };
     const isDragging = drag !== undefined && dragging(drag);
-    if (stage !== 'off' && hover !== undefined && !isDragging && draft === undefined) {
-      frame(rectOf(hover.element), 'dashed', hover.words);
+    if (
+      stage !== "off" &&
+      hover !== undefined &&
+      !isDragging &&
+      draft === undefined
+    ) {
+      frame(rectOf(hover.element), "dashed", hover.words);
     }
     if (drag !== undefined && isDragging) {
-      frame(between(drag.from, drag.to), 'drag', this.mode.text('regionLabel'));
+      frame(between(drag.from, drag.to), "drag", this.mode.text("regionLabel"));
     }
-    if (typeof corners !== 'string') {
-      const corner = h(this.document, 'div', { class: 'corner' });
+    if (typeof corners !== "string") {
+      const corner = h(this.document, "div", { class: "corner" });
       place(corner, { left: corners[0], top: corners[1] });
       frames.push(corner);
     }
     if (draft !== undefined) {
-      frame(draft.anchor, '', draft.label);
+      frame(draft.anchor, "", draft.label);
     }
     this.marks.replaceChildren(...frames);
   }
@@ -140,11 +158,14 @@ export class Overlay {
     const { shown, stage } = this.mode.state;
     const [width, height] = this.mode.windowSize();
     const anchored: [number, Point][] = [];
-    if (stage === 'on') {
+    if (stage === "on") {
       shown.forEach((item, index) => {
         const rect = anchor(this.document, bodyOf(item).target);
         if (rect !== undefined) {
-          const y = Math.min(Math.max(rect.y - PIN / 2, 0), Math.max(height - PIN, 0));
+          const y = Math.min(
+            Math.max(rect.y - PIN / 2, 0),
+            Math.max(height - PIN, 0),
+          );
           anchored.push([index + 1, [rect.x + rect.width - PIN / 2, y]]);
         }
       });
@@ -154,7 +175,12 @@ export class Overlay {
       PIN + PIN_GAP,
       width - PIN,
     );
-    const existing = new Map(Array.from(this.pins.children).map((pin) => [pin.getAttribute('data-number'), pin]));
+    const existing = new Map(
+      Array.from(this.pins.children).map((pin) => [
+        pin.getAttribute("data-number"),
+        pin,
+      ]),
+    );
     const kept = anchored.map(([number], index) => {
       const pin = existing.get(String(number)) ?? this.pin(number);
       const [x, y] = places[index] ?? [0, 0];
@@ -163,7 +189,10 @@ export class Overlay {
       }
       return pin;
     });
-    if (kept.length !== this.pins.children.length || kept.some((pin, index) => this.pins.children[index] !== pin)) {
+    if (
+      kept.length !== this.pins.children.length ||
+      kept.some((pin, index) => this.pins.children[index] !== pin)
+    ) {
       this.pins.replaceChildren(...kept);
     }
   }
@@ -172,23 +201,25 @@ export class Overlay {
   private pin(number: number): HTMLButtonElement {
     const pin = h(
       this.document,
-      'button',
+      "button",
       {
-        type: 'button',
-        class: 'pin interactive',
-        'data-number': number,
-        'aria-label': this.mode.text('pin', { number }),
+        type: "button",
+        class: "pin interactive",
+        "data-number": number,
+        "aria-label": this.mode.text("pin", { number }),
       },
       String(number),
     );
-    pin.addEventListener('click', () => this.mode.set({ panel: true, focus: { item: number } }));
+    pin.addEventListener("click", () =>
+      this.mode.set({ panel: true, focus: { item: number } }),
+    );
     return pin;
   }
 
   /** The bar while the mode is on and the list is closed. */
   private renderBar(): void {
     const { stage, panel } = this.mode.state;
-    const shows = stage === 'on' && !panel;
+    const shows = stage === "on" && !panel;
     if (shows && this.bar === undefined) {
       this.bar = new Bar(this.mode, this.document);
       this.layer.appendChild(this.bar.element);
@@ -202,21 +233,26 @@ export class Overlay {
   /** The question when the mode starts, or why it keeps nothing: a modal dialog, so the page is inert behind it. */
   private renderPrompt(): void {
     const { stage, unable } = this.mode.state;
-    const key = stage === 'looking' || stage === 'asking' || stage === 'unable' ? `${stage}:${unable ?? ''}` : '';
+    const key =
+      stage === "looking" || stage === "asking" || stage === "unable"
+        ? `${stage}:${unable ?? ""}`
+        : "";
     if (this.prompt?.key === key) {
       return;
     }
     this.prompt?.element.remove();
     this.prompt = undefined;
-    this.layer.querySelector('.looking')?.remove();
-    if (stage === 'looking') {
-      this.layer.appendChild(h(this.document, 'p', { class: 'looking' }, this.mode.text('looking')));
-    } else if (key !== '') {
+    this.layer.querySelector(".looking")?.remove();
+    if (stage === "looking") {
+      this.layer.appendChild(
+        h(this.document, "p", { class: "looking" }, this.mode.text("looking")),
+      );
+    } else if (key !== "") {
       const element = this.dialog();
       this.layer.appendChild(element);
       element.showModal?.();
       this.prompt = { key, element };
-      focus(element.querySelector('.primary'));
+      focus(element.querySelector(".primary"));
     }
   }
 
@@ -224,24 +260,46 @@ export class Overlay {
   private dialog(): HTMLDialogElement {
     const { stage, unable } = this.mode.state;
     const text = (key: MessageKey): string => this.mode.text(key);
-    const asking = stage === 'asking';
+    const asking = stage === "asking";
     const actions = asking
       ? [
-          button(this.document, { label: text('without') }, () => void this.mode.answer(false)),
-          button(this.document, { label: text('share'), primary: true }, () => void this.mode.answer(true)),
+          button(
+            this.document,
+            { label: text("without") },
+            () => void this.mode.withoutPictures(),
+          ),
+          button(
+            this.document,
+            { label: text("share"), primary: true },
+            () => void this.mode.share(),
+          ),
         ]
-      : [button(this.document, { label: text('leave'), primary: true }, () => this.mode.leave())];
+      : [
+          button(this.document, { label: text("leave"), primary: true }, () =>
+            this.mode.leave(),
+          ),
+        ];
     const element = h(
       this.document,
-      'dialog',
-      { class: 'interactive', 'aria-labelledby': PROMPT_TITLE },
-      h(this.document, 'p', { class: 'caption' }, text('mode')),
-      h(this.document, 'h2', { id: PROMPT_TITLE }, text(asking ? 'shareTitle' : 'unableTitle')),
-      h(this.document, 'p', {}, text(asking ? 'shareText' : UNABLE_TEXTS[unable ?? 'no-service'])),
-      h(this.document, 'div', { class: 'actions' }, ...actions),
+      "dialog",
+      { class: "interactive", "aria-labelledby": PROMPT_TITLE },
+      h(this.document, "p", { class: "caption" }, text("mode")),
+      h(
+        this.document,
+        "h2",
+        { id: PROMPT_TITLE },
+        text(asking ? "shareTitle" : "unableTitle"),
+      ),
+      h(
+        this.document,
+        "p",
+        {},
+        text(asking ? "shareText" : UNABLE_TEXTS[unable ?? "no-service"]),
+      ),
+      h(this.document, "div", { class: "actions" }, ...actions),
     );
     // Escape goes back through the mode's keys, which leave it, rather than closing only the dialog.
-    element.addEventListener('cancel', (event) => event.preventDefault());
+    element.addEventListener("cancel", (event) => event.preventDefault());
     return element;
   }
 
@@ -260,7 +318,7 @@ export class Overlay {
     }
     const problem = this.draft?.element.querySelector('[role="alert"]');
     if (problem !== undefined && problem !== null) {
-      setText(problem, draft?.problem ?? '');
+      setText(problem, draft?.problem ?? "");
     }
   }
 
@@ -286,10 +344,10 @@ export class Overlay {
       return;
     }
     this.mode.state.focus = undefined;
-    if ('page' in request) {
+    if ("page" in request) {
       focus(request.page);
     } else {
-      const id = 'item' in request ? itemId(request.item) : request.ours;
+      const id = "item" in request ? itemId(request.item) : request.ours;
       focus(this.layer.querySelector(`#${id}`));
     }
   }

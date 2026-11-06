@@ -19,6 +19,8 @@ export const MAX_CONTEXT_BYTES = 262_144;
 export const MAX_CONSOLE = 50;
 /** The most characters of a stack trace. */
 export const MAX_STACK = 4_000;
+/** The most characters of a request's method or of a time. */
+export const MAX_WORD = 64;
 
 /** A rectangle in CSS pixels: of the window, or of a canvas for a canvas's items. */
 export interface Rect {
@@ -77,7 +79,9 @@ export interface Region {
 
 /** What an annotation is about. */
 export type Target =
-  ({ kind: 'element' } & Element) | ({ kind: 'canvas' } & CanvasItems) | ({ kind: 'region' } & Region);
+  | ({ kind: "element" } & Element)
+  | ({ kind: "canvas" } & CanvasItems)
+  | ({ kind: "region" } & Region);
 
 /** What the user wrote, about what, and where. */
 export interface AnnotationBody {
@@ -92,8 +96,17 @@ export interface AnnotationBody {
   state: Entry[];
 }
 
-/** What the console said, or a request that failed, before an annotation was saved. */
-export type ConsoleKind = 'error' | 'warn' | 'uncaught' | 'rejection' | 'network';
+/** Every kind of a console's entry: what the console said, or a request that failed, before an annotation was saved. */
+export const CONSOLE_KINDS = [
+  "error",
+  "warn",
+  "uncaught",
+  "rejection",
+  "network",
+] as const;
+
+/** The kind of a console's entry. */
+export type ConsoleKind = (typeof CONSOLE_KINDS)[number];
 
 /** One entry of the console, or a request that failed. */
 export interface ConsoleEntry {
@@ -109,7 +122,8 @@ export interface ConsoleEntry {
 }
 
 /** A value of JSON. */
-export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
+export type Json =
+  null | boolean | number | string | Json[] | { [key: string]: Json };
 
 /** An annotation as the client sends it; its pictures are PNG in Base64. */
 export interface NewAnnotation extends AnnotationBody {
@@ -120,10 +134,15 @@ export interface NewAnnotation extends AnnotationBody {
 }
 
 /** Where an annotation stands. */
-export type Status = 'open' | 'in_progress' | 'done' | 'wont_do';
+export type Status = "open" | "in_progress" | "done" | "wont_do";
 
 /** Every status, in the order of its course. */
-export const STATUSES: readonly Status[] = ['open', 'in_progress', 'done', 'wont_do'];
+export const STATUSES: readonly Status[] = [
+  "open",
+  "in_progress",
+  "done",
+  "wont_do",
+];
 
 /** An annotation as the service keeps it. */
 export interface Annotation extends AnnotationBody {
@@ -142,15 +161,23 @@ export interface Annotation extends AnnotationBody {
 
 /** Whether `name` names an app: 1 to {@link MAX_APP} lowercase letters, digits, `-` and `_`. */
 export function isAppName(name: string): boolean {
-  return name.length >= 1 && name.length <= MAX_APP && /^[a-z0-9_-]+$/.test(name);
+  return (
+    name.length >= 1 && name.length <= MAX_APP && /^[a-z0-9_-]+$/.test(name)
+  );
 }
 
 /** Whether `version` names a build: a commit such as `47d97f7+dirty` or a version such as `1.4.0-rc.1`. */
 export function isVersion(version: string): boolean {
-  return version.length >= 1 && version.length <= MAX_VERSION && /^[A-Za-z0-9._+-]+$/.test(version);
+  return (
+    version.length >= 1 &&
+    version.length <= MAX_VERSION &&
+    /^[A-Za-z0-9._+-]+$/.test(version)
+  );
 }
 
 /** Whether `value` is a status the service knows. */
 export function isStatus(value: unknown): value is Status {
-  return typeof value === 'string' && (STATUSES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" && (STATUSES as readonly string[]).includes(value)
+  );
 }

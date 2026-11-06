@@ -2,24 +2,43 @@
 // so they neither take the host's CSS nor give it theirs, and screen readers and tests still find them. The element is
 // defined only when the page mounts it, so importing the client on a server, as in server-side rendering, touches no DOM.
 
-import { asksForMode } from './address';
-import { Capture } from './capture';
-import type { Config } from './config';
-import { HOST_TAG } from './describe';
-import { hear } from './diagnostics';
-import { listenKeys, listenPage, type Listeners } from './input';
-import { Mode } from './mode';
-import { Outbox } from './outbox';
-import { styleSheet } from './styles';
-import { Overlay } from './view';
+import { asksForMode } from "./address";
+import { Capture } from "./capture";
+import type { Config } from "./config";
+import { HOST_TAG } from "./describe";
+import { hear } from "./diagnostics";
+import { listenKeys, listenPage, type Listeners } from "./input";
+import { Mode, type Environment } from "./mode";
+import { Outbox } from "./outbox";
+import { styleSheet } from "./styles";
+import { Overlay } from "./view";
 
 /** The mode's element, as the page holds it. */
 export interface AnnotateElement extends HTMLElement {
   readonly mode: Mode | undefined;
 }
 
+/** What the mode needs of `window` and the app's `config`. */
+function environmentOf(
+  window: Window & typeof globalThis,
+  config: Config,
+): Environment {
+  const heard = hear(window);
+  return {
+    config,
+    fetch: heard.fetch,
+    outbox: new Outbox(window.indexedDB),
+    window,
+    startCapture: (ended) => Capture.start(window, ended),
+    diagnostics: heard.diagnostics,
+  };
+}
+
 /** Defines `<annotate-mode>` in `window` with `config`, once; the element's class. */
-export function defineElement(window: Window & typeof globalThis, config: Config): void {
+export function defineElement(
+  window: Window & typeof globalThis,
+  config: Config,
+): void {
   if (window.customElements.get(HOST_TAG) !== undefined) {
     return;
   }
@@ -33,20 +52,12 @@ export function defineElement(window: Window & typeof globalThis, config: Config
       if (this.mode !== undefined) {
         return;
       }
-      const root = this.shadowRoot ?? this.attachShadow({ mode: 'open' });
+      const root = this.shadowRoot ?? this.attachShadow({ mode: "open" });
       const sheet = styleSheet();
       if (sheet !== undefined) {
         root.adoptedStyleSheets = [sheet];
       }
-      const heard = hear(window);
-      const mode = new Mode({
-        config,
-        fetch: heard.fetch,
-        outbox: new Outbox(window.indexedDB),
-        window,
-        startCapture: (ended) => Capture.start(ended),
-        diagnostics: heard.diagnostics,
-      });
+      const mode = new Mode(environmentOf(window, config));
       const overlay = new Overlay(mode, root);
       this.mode = mode;
       this.unsubscribe = mode.subscribe(() => {
@@ -72,7 +83,7 @@ export function defineElement(window: Window & typeof globalThis, config: Config
 
     /** Hears the page's pointer while the mode is on, and stops once it is off. */
     private listenWhileOn(mode: Mode): void {
-      const on = mode.state.stage !== 'off';
+      const on = mode.state.stage !== "off";
       if (on && this.page === undefined) {
         this.page = listenPage(mode, window);
       } else if (!on && this.page !== undefined) {

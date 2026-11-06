@@ -1,10 +1,10 @@
-import { IDBFactory } from 'fake-indexeddb';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Fetch } from '../src/api';
-import { Config } from '../src/config';
-import { Diagnostics } from '../src/diagnostics';
-import { Mode } from '../src/mode';
-import { Outbox } from '../src/outbox';
+import { IDBFactory } from "fake-indexeddb";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Fetch } from "../src/api";
+import { Config } from "../src/config";
+import { Diagnostics } from "../src/diagnostics";
+import { Mode } from "../src/mode";
+import { Outbox } from "../src/outbox";
 
 /** A stand-in service: what it was sent, and how it answers posts for now. */
 interface Service {
@@ -15,21 +15,28 @@ interface Service {
 
 function fetchOf(service: Service): Fetch {
   return (_url, init) => {
-    if (init.method === 'POST') {
+    if (init.method === "POST") {
       if (service.postStatus === 201) {
-        service.posted.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        service.posted.push(
+          JSON.parse(String(init.body)) as Record<string, unknown>,
+        );
       }
-      const body = service.postStatus === 422 ? '{"detail":"comment is empty"}' : '{}';
-      return Promise.resolve(new Response(body, { status: service.postStatus }));
+      const body =
+        service.postStatus === 422 ? '{"detail":"comment is empty"}' : "{}";
+      return Promise.resolve(
+        new Response(body, { status: service.postStatus }),
+      );
     }
     const list = service.posted.map((each, index) => ({
       ...each,
       id: `${index}`,
-      created: 't',
-      author: 'a',
-      status: 'open',
+      created: "t",
+      author: "a",
+      status: "open",
     }));
-    return Promise.resolve(new Response(JSON.stringify(list), { status: service.listStatus }));
+    return Promise.resolve(
+      new Response(JSON.stringify(list), { status: service.listStatus }),
+    );
   };
 }
 
@@ -44,123 +51,202 @@ function setUp(configure: (config: Config) => void = () => undefined) {
     fetch: fetchOf(service),
     outbox,
     window,
-    startCapture: () => Promise.resolve({ unshared: 'declined', error: new Error('no') }),
+    startCapture: () =>
+      Promise.resolve({ unshared: "declined", error: new Error("no") }),
     diagnostics,
   });
   return { service, config, mode, outbox, diagnostics };
 }
 
-const said = async (mode: Mode, text: string | RegExp) => vi.waitFor(() => expect(mode.state.said).toMatch(text));
+const said = async (mode: Mode, text: string | RegExp) =>
+  vi.waitFor(() => expect(mode.state.said).toMatch(text));
 
 beforeEach(() => {
-  vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
   document.head.innerHTML =
     '<title>Settings</title><meta name="annotate-app" content="demo"><meta name="annotate-version" content="1.4.0">';
-  document.body.innerHTML = '<button type="button">Save</button><p data-annotate-private>secret</p>';
+  document.body.innerHTML =
+    '<button type="button">Save</button><p data-annotate-private>secret</p>';
 });
 
-describe('the mode', () => {
+describe("the mode", () => {
   it.each([
-    ['no-app', () => document.head.querySelector('[name="annotate-app"]')?.remove(), 200],
-    ['no-version', () => document.head.querySelector('[name="annotate-version"]')?.remove(), 200],
-    ['no-service', () => undefined, 404],
-    ['not-now', () => undefined, 503],
-  ])('keeps nothing and says why: %s', async (unable, change, listStatus) => {
+    [
+      "no-app",
+      () => document.head.querySelector('[name="annotate-app"]')?.remove(),
+      200,
+    ],
+    [
+      "no-version",
+      () => document.head.querySelector('[name="annotate-version"]')?.remove(),
+      200,
+    ],
+    ["no-service", () => undefined, 404],
+    ["not-now", () => undefined, 503],
+  ])("keeps nothing and says why: %s", async (unable, change, listStatus) => {
     change();
     const { mode, service } = setUp();
     service.listStatus = listStatus;
     await mode.start();
-    expect(mode.state).toMatchObject({ stage: 'unable', unable });
+    expect(mode.state).toMatchObject({ stage: "unable", unable });
   });
 
-  it('asks to share the tab, then pins a comment with the state, console and context to the service', async () => {
+  it("asks to share the tab, then pins a comment with the state, console and context to the service", async () => {
     const { mode, service, diagnostics } = setUp((config) => {
-      config.register('context', () => ({ turn: 1 }));
-      config.register('state', () => ({ zoom: '1.8' }));
+      config.register("context", () => ({ turn: 1 }));
+      config.register("state", () => ({ zoom: "1.8" }));
     });
     const events: string[] = [];
-    for (const name of ['start', 'saved', 'end']) {
+    for (const name of ["start", "saved", "end"]) {
       document.addEventListener(`annotate:${name}`, () => events.push(name));
     }
-    diagnostics.recordValues('error', ['boom']);
+    diagnostics.recordValues("error", ["boom"]);
     await mode.start();
-    expect(mode.state.stage).toBe('asking');
-    await mode.answer(true);
-    expect(mode.state.stage).toBe('on');
-    await said(mode, 'The tab is not shared, so your annotations go without pictures.');
-    await mode.pin(document.querySelector('button') as Element, undefined, true);
-    expect(mode.state.draft?.heading).toBe('button · Save');
-    await mode.save('  ');
-    expect(mode.state.draft?.problem).toBe('Write a comment first.');
-    await mode.save('Make it bigger.');
+    expect(mode.state.stage).toBe("asking");
+    await mode.share();
+    expect(mode.state.stage).toBe("on");
+    await said(
+      mode,
+      "The tab is not shared, so your annotations go without pictures.",
+    );
+    await mode.pin(document.querySelector("button") as Element, {
+      by: "keyboard",
+    });
+    expect(mode.state.draft?.heading).toBe("button · Save");
+    await mode.save("  ");
+    expect(mode.state.draft?.problem).toBe("Write a comment first.");
+    await mode.save("Make it bigger.");
     expect(mode.state.draft).toBeUndefined();
     expect(service.posted[0]).toMatchObject({
-      app: 'demo',
-      version: '1.4.0',
-      comment: 'Make it bigger.',
-      state: [{ name: 'zoom', value: '1.8' }],
+      app: "demo",
+      version: "1.4.0",
+      comment: "Make it bigger.",
+      state: [{ name: "zoom", value: "1.8" }],
       context: { turn: 1 },
-      console: [{ kind: 'error', message: 'boom' }],
+      console: [{ kind: "error", message: "boom" }],
     });
     expect(mode.state.shown).toHaveLength(1);
     mode.leave();
-    expect(mode.state.stage).toBe('off');
-    expect(events).toEqual(['start', 'saved', 'end']);
+    expect(mode.state.stage).toBe("off");
+    expect(events).toEqual(["start", "saved", "end"]);
   });
 
-  it('goes without the question where the app takes no pictures, and leaves the console out where it is off', async () => {
+  it("goes without the question where the app takes no pictures, and leaves the console out where it is off", async () => {
     const { mode, service } = setUp((config) => {
-      config.register('pictures', () => false);
+      config.register("pictures", () => false);
       config.configure({ console: false });
     });
     await mode.start();
-    expect(mode.state.stage).toBe('on');
-    await mode.pin(document.querySelector('button') as Element, undefined, true);
-    await mode.save('x');
-    expect(service.posted[0]).not.toHaveProperty('console');
+    expect(mode.state.stage).toBe("on");
+    await mode.pin(document.querySelector("button") as Element, {
+      by: "keyboard",
+    });
+    await mode.save("x");
+    expect(service.posted[0]).not.toHaveProperty("console");
   });
 
-  it('keeps nothing the app denies, and nothing of a private part', async () => {
-    const { mode, service } = setUp((config) => config.register('redact', () => null));
+  it("keeps nothing the app denies, and nothing of a private part", async () => {
+    const { mode, service } = setUp((config) =>
+      config.register("redact", () => null),
+    );
     await mode.start();
-    await mode.answer(false);
-    await mode.pin(document.querySelector('p') as Element, undefined, true);
+    await mode.withoutPictures();
+    await mode.pin(document.querySelector("p") as Element, { by: "keyboard" });
     expect(mode.state.draft).toBeUndefined();
-    await said(mode, 'This part of the app is not annotated.');
-    await mode.pin(document.querySelector('button') as Element, undefined, true);
-    await mode.save('x');
-    expect(mode.state.draft?.problem).toBe('Not saved: the app keeps no annotation of this.');
+    await said(mode, "This part of the app is not annotated.");
+    await mode.pin(document.querySelector("button") as Element, {
+      by: "keyboard",
+    });
+    await mode.save("x");
+    expect(mode.state.draft?.problem).toBe(
+      "Not saved: the app keeps no annotation of this.",
+    );
     expect(service.posted).toEqual([]);
   });
 
-  it('keeps an annotation in the outbox while the service is down, and shows why it refuses one', async () => {
+  it("keeps an annotation in the outbox while the service is down, and shows why it refuses one", async () => {
     const { mode, service, outbox } = setUp();
     await mode.start();
-    await mode.answer(false);
+    await mode.withoutPictures();
     service.postStatus = 422;
-    await mode.pin(document.querySelector('button') as Element, undefined, true);
-    await mode.save('x');
-    expect(mode.state.draft?.problem).toBe('Not saved: comment is empty');
+    await mode.pin(document.querySelector("button") as Element, {
+      by: "keyboard",
+    });
+    await mode.save("x");
+    expect(mode.state.draft?.problem).toBe("Not saved: comment is empty");
     service.postStatus = 503;
-    await mode.save('Later.');
+    await mode.save("Later.");
     await said(mode, /Kept in this browser/);
-    expect((await outbox.waiting()).map((each) => each.annotation.comment)).toEqual(['Later.']);
-    expect(mode.state.shown).toEqual([{ waiting: expect.objectContaining({ comment: 'Later.' }) }]);
+    expect(
+      (await outbox.waiting()).map((each) => each.annotation.comment),
+    ).toEqual(["Later."]);
+    expect(mode.state.shown).toEqual([
+      { waiting: expect.objectContaining({ comment: "Later." }) },
+    ]);
   });
 
-  it('goes back step by step with Escape: the comment, the corner, the list, then the mode', async () => {
+  it("sends to the page's own host only", async () => {
+    const { mode } = setUp((config) =>
+      config.configure({ endpoint: "https://annotations.example/api" }),
+    );
+    await mode.start();
+    expect(mode.state).toMatchObject({
+      stage: "unable",
+      unable: "foreign-endpoint",
+    });
+  });
+
+  it("says so where the service refuses what waited, and drops it", async () => {
+    const { mode, service, outbox } = setUp();
+    await outbox.keep({
+      app: "demo",
+      comment: "old",
+      path: "/",
+      target: { kind: "region" },
+    } as never);
+    service.postStatus = 401;
+    await mode.start();
+    await mode.withoutPictures();
+    await said(
+      mode,
+      "Annotations kept in this browser were refused and dropped: 1 (HTTP 401).",
+    );
+    expect(await outbox.waiting()).toEqual([]);
+  });
+
+  it("lets go of the crop's picture once the comment closes", async () => {
+    const revoke = vi.fn();
+    URL.revokeObjectURL = revoke;
     const { mode } = setUp();
     await mode.start();
-    await mode.answer(false);
-    await mode.pin(document.querySelector('button') as Element, undefined, true);
-    mode.set({ corners: 'first', panel: true });
+    await mode.withoutPictures();
+    await mode.pin(document.querySelector("button") as Element, {
+      by: "keyboard",
+    });
+    const draft = mode.state.draft;
+    if (draft === undefined) {
+      throw new Error("no draft");
+    }
+    mode.set({ draft: { ...draft, pictures: { cropUrl: "blob:crop" } } });
+    mode.closeDraft();
+    expect(revoke).toHaveBeenCalledWith("blob:crop");
+  });
+
+  it("goes back step by step with Escape: the comment, the corner, the list, then the mode", async () => {
+    const { mode } = setUp();
+    await mode.start();
+    await mode.withoutPictures();
+    await mode.pin(document.querySelector("button") as Element, {
+      by: "keyboard",
+    });
+    mode.set({ corners: "first", panel: true });
     mode.back();
     expect(mode.state.draft).toBeUndefined();
     mode.back();
-    expect(mode.state.corners).toBe('off');
+    expect(mode.state.corners).toBe("off");
     mode.back();
     expect(mode.state.panel).toBe(false);
     mode.back();
-    expect(mode.state.stage).toBe('off');
+    expect(mode.state.stage).toBe("off");
   });
 });

@@ -1,10 +1,10 @@
 // Where the mode's parts go on the window: the rectangle a drag spans, what lies wholly in it, the popover beside its
 // target, the pins beside each other and the pixels a crop takes, all in the window's CSS pixels.
 
-import type { Rect } from './model';
+import type { Rect } from "./model";
 
 /** The space between a target and its popover, and between the popover and the window's edges. */
-export const GAP = 12;
+const GAP = 12;
 
 /** How much a frame's shape may differ from the window's and still show it, as after a resize the stream lags. */
 const SAME_SHAPE = 0.02;
@@ -43,7 +43,9 @@ export function overlap(a: Rect, b: Rect): Rect | undefined {
   const y = Math.max(a.y, b.y);
   const right = Math.min(a.x + a.width, b.x + b.width);
   const bottom = Math.min(a.y + a.height, b.y + b.height);
-  return right > x && bottom > y ? { x, y, width: right - x, height: bottom - y } : undefined;
+  return right > x && bottom > y
+    ? { x, y, width: right - x, height: bottom - y }
+    : undefined;
 }
 
 /** `rect`, given in the CSS pixels of something at `origin`, in the window's. */
@@ -71,7 +73,13 @@ export interface Popover {
  * leaves free for the bar: on the target's right where it fits, else on its left, else under it; from there down
  * where `room` is left under it, else from the free space's bottom up; always in the window.
  */
-export function popoverAt(anchor: Rect, width: number, room: number, window: Size, kept: number): Popover {
+export function popoverAt(
+  anchor: Rect,
+  width: number,
+  room: number,
+  window: Size,
+  kept: number,
+): Popover {
   const right = anchor.x + anchor.width + GAP;
   const left = anchor.x - GAP - width;
   const [x, wantedTop] =
@@ -95,7 +103,11 @@ export function popoverAt(anchor: Rect, width: number, room: number, window: Siz
  * before it that it would cover, right first, then left, so no pin hides another (WCAG 2.5.8). Where a row has no
  * room left, a pin stays where it wanted.
  */
-export function spread(wanted: readonly Point[], size: number, maxX: number): Point[] {
+export function spread(
+  wanted: readonly Point[],
+  size: number,
+  maxX: number,
+): Point[] {
   const limit = Math.max(maxX, 0);
   const steps = Math.ceil(limit / size) + 1;
   const placed: Point[] = [];
@@ -104,8 +116,16 @@ export function spread(wanted: readonly Point[], size: number, maxX: number): Po
     let found: number | undefined;
     for (let step = 0; step <= steps && found === undefined; step += 1) {
       for (const candidate of [x + step * size, x - step * size]) {
-        const free = !placed.some(([left, top]) => Math.abs(left - candidate) < size && Math.abs(top - y) < size);
-        if (found === undefined && candidate >= 0 && candidate <= limit && free) {
+        const free = !placed.some(
+          ([left, top]) =>
+            Math.abs(left - candidate) < size && Math.abs(top - y) < size,
+        );
+        if (
+          found === undefined &&
+          candidate >= 0 &&
+          candidate <= limit &&
+          free
+        ) {
           found = candidate;
         }
       }
@@ -116,14 +136,24 @@ export function spread(wanted: readonly Point[], size: number, maxX: number): Po
 }
 
 /** An area of a frame's pixels: left, top, width and height. */
-export type Area = readonly [left: number, top: number, width: number, height: number];
+export type Area = readonly [
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+];
 
 /**
  * The pixels of a crop around `target` with `margin` on each side, in a frame of `frame` pixels that shows a window of
  * `window` CSS pixels, within the frame; none where nothing of the target lies in the window, or the frame shows more
  * than the window.
  */
-export function cropPixels(target: Rect, margin: number, window: Size, frame: Size): Area | undefined {
+export function cropPixels(
+  target: Rect,
+  margin: number,
+  window: Size,
+  frame: Size,
+): Area | undefined {
   if (!showsWindow(frame, window)) {
     return undefined;
   }
@@ -132,11 +162,19 @@ export function cropPixels(target: Rect, margin: number, window: Size, frame: Si
   const left = Math.max((target.x - margin) * scaleX, 0);
   const top = Math.max((target.y - margin) * scaleY, 0);
   const right = Math.min((target.x + target.width + margin) * scaleX, frame[0]);
-  const bottom = Math.min((target.y + target.height + margin) * scaleY, frame[1]);
+  const bottom = Math.min(
+    (target.y + target.height + margin) * scaleY,
+    frame[1],
+  );
   if (right - left < 1 || bottom - top < 1) {
     return undefined;
   }
-  return [Math.floor(left), Math.floor(top), Math.ceil(right - left), Math.ceil(bottom - top)];
+  return [
+    Math.floor(left),
+    Math.floor(top),
+    Math.ceil(right - left),
+    Math.ceil(bottom - top),
+  ];
 }
 
 /**
@@ -147,11 +185,18 @@ export function showsWindow(frame: Size, window: Size): boolean {
   if (window[0] <= 0 || window[1] <= 0 || frame[0] === 0 || frame[1] === 0) {
     return false;
   }
-  return Math.abs(frame[0] / frame[1] / (window[0] / window[1]) - 1) <= SAME_SHAPE;
+  return (
+    Math.abs(frame[0] / frame[1] / (window[0] / window[1]) - 1) <= SAME_SHAPE
+  );
 }
 
 /** The scale at which a picture of `width` by `height` pixels has at most `pixels`, and never more than `scale`. */
-export function scaleFor(width: number, height: number, pixels: number, scale: number): number {
+export function scaleFor(
+  width: number,
+  height: number,
+  pixels: number,
+  scale: number,
+): number {
   const area = width * height * scale * scale;
   return area <= pixels || area <= 0 ? scale : scale * Math.sqrt(pixels / area);
 }

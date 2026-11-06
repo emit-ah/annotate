@@ -1,11 +1,98 @@
 // What went wrong in the app before an annotation was saved, heard without the app doing anything (ADR-0001): the
 // latest console errors and warnings, uncaught errors, unhandled rejections and failed requests, each with its stack
 // where it has one, in a ring of MAX_CONSOLE entries. `<meta name="annotate-console" content="off">` turns it off.
+//
+// What it keeps is scrubbed first: queries, Bearer and Basic tokens and `key=value` secrets go, objects are named by
+// their keys or kind and never by their values, and a request keeps its path only. Tokens in a path are caught by a
+// heuristic, long runs of letters and digits; a secret of another shape in a message stays.
 
-import { MAX_CONSOLE, MAX_STACK, MAX_TEXT, type ConsoleEntry, type ConsoleKind } from './model';
+import {
+  MAX_CONSOLE,
+  MAX_STACK,
+  MAX_TEXT,
+  MAX_WORD,
+  type ConsoleEntry,
+  type ConsoleKind,
+} from "./model";
+import { meta } from "./page";
+import { capped } from "./text";
 
 /** The HTTP status from which an answer counts as failed. */
 const FAILED_STATUS = 400;
+
+/** What stands for what was scrubbed. */
+const REDACTED = "[redacted]";
+
+/** What stands for a token in a path. */
+const PATH_TOKEN = ":token";
+
+/** A query in a text: a `?` and what follows it up to white space or a quote, where it has a `=`. */
+const QUERY = /\?[^\s"'<>]*/g;
+
+/** A token after `Bearer` or `Basic`. */
+const AUTHORIZATION = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
+
+/** A `key=value` or `key: value` whose key names a secret. */
+const SECRET =
+  /\b([\w-]*(?:token|key|code|password|secret)|auth\w*)(\s*[=:]\s*)(?!(?:Bearer|Basic)\b)("[^"]*"|'[^']*'|[^\s&,;]+)/gi;
+
+/** A segment of a path that looks like a token: a long run of letters, digits, `-` and `_` with a digit in it. */
+const TOKEN_SEGMENT = /^(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}$/;
+
+/** The schemes whose addresses have a path worth keeping. */
+const WEB_SCHEMES = ["http:", "https:"];
+
+/** The base a relative address is read against, which never shows. */
+const LOCAL_BASE = "http://local.invalid";
+
+/** `text` without queries, tokens and secrets. */
+export function scrubbed(text: string): string {
+  return text
+    .replace(QUERY, (query) => (query.includes("=") ? "" : query))
+    .replace(AUTHORIZATION, `$1 ${REDACTED}`)
+    .replace(SECRET, `$1$2${REDACTED}`);
+}
+
+/** `value` as the console would print it, but an object by its keys or kind only. */
+function inWords(value: unknown): string {
+  if (value instanceof Error) {
+    return `${value.name}: ${value.message}`;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return `Array(${value.length})`;
+  }
+  if (typeof value === "object" && value !== null) {
+    const kind = Object.getPrototypeOf(value)?.constructor?.name;
+    return kind === undefined || kind === "Object"
+      ? `{${Object.keys(value).join(", ")}}`
+      : String(kind);
+  }
+  return String(value);
+}
+
+/** The path of `url` without its query, its fragment, tokens in it or the content of a `data:` or `blob:` address. */
+export function pathOf(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url, LOCAL_BASE);
+  } catch {
+    return capped(url.split(/[?#]/)[0] ?? "", MAX_TEXT);
+  }
+  if (!WEB_SCHEMES.includes(parsed.protocol)) {
+    return parsed.protocol;
+  }
+  const path = parsed.pathname
+    .split("/")
+    .map((segment) => (TOKEN_SEGMENT.test(segment) ? PATH_TOKEN : segment))
+    .join("/");
+  return capped(
+    parsed.origin === LOCAL_BASE ? path : `${parsed.origin}${path}`,
+    MAX_TEXT,
+  );
+}
 
 /** The ring of the latest entries, newest last. */
 export class Diagnostics {
@@ -17,18 +104,23 @@ export class Diagnostics {
   }
 
   /** Keeps `entry`, and drops the oldest past MAX_CONSOLE. */
-  record(entry: Omit<ConsoleEntry, 'time'>): void {
+  private record(entry: Omit<ConsoleEntry, "time">): void {
     this.entries.push({ ...entry, time: new Date().toISOString() });
     this.entries.splice(0, Math.max(this.entries.length - MAX_CONSOLE, 0));
   }
 
-  /** Keeps what `values` say, as the console would print them. */
+  /** Keeps what `values` say, as the console would print them, scrubbed. */
   recordValues(kind: ConsoleKind, values: readonly unknown[]): void {
-    const error = values.find((value): value is Error => value instanceof Error);
-    const stack = error?.stack === undefined ? undefined : capped(error.stack, MAX_STACK);
+    const error = values.find(
+      (value): value is Error => value instanceof Error,
+    );
+    const stack =
+      error?.stack === undefined
+        ? undefined
+        : capped(scrubbed(error.stack), MAX_STACK);
     this.record({
       kind,
-      message: capped(values.map(inWords).join(' '), MAX_TEXT),
+      message: capped(scrubbed(values.map(inWords).join(" ")), MAX_TEXT),
       ...(stack === undefined ? {} : { stack }),
     });
   }
@@ -36,76 +128,54 @@ export class Diagnostics {
   /** Keeps a request of `method` to `url` that failed with `status`, 0 where no answer came. */
   recordRequest(method: string, url: string, status: number): void {
     const path = pathOf(url);
+    const verb = capped(method, MAX_WORD);
     this.record({
-      kind: 'network',
-      message: capped(`${method} ${path} ${status}`, MAX_TEXT),
-      method,
+      kind: "network",
+      message: capped(`${verb} ${path} ${status}`, MAX_TEXT),
+      method: verb,
       url: path,
       status,
     });
   }
 }
 
-/** `text` cut after `max` characters. */
-function capped(text: string, max: number): string {
-  const characters = Array.from(text);
-  return characters.length > max ? `${characters.slice(0, max).join('')}…` : text;
-}
-
-/** `value` as the console would print it. */
-function inWords(value: unknown): string {
-  if (value instanceof Error) {
-    return `${value.name}: ${value.message}`;
-  }
-  if (typeof value === 'string') {
-    return value;
-  }
-  try {
-    return JSON.stringify(value) ?? String(value);
-  } catch {
-    return String(value);
-  }
-}
-
-/** The path of `url` without its query or fragment, which may hold secrets. */
-export function pathOf(url: string): string {
-  try {
-    const parsed = new URL(url, 'http://local.invalid');
-    return parsed.origin === 'http://local.invalid' ? parsed.pathname : `${parsed.origin}${parsed.pathname}`;
-  } catch {
-    return capped(url.split(/[?#]/)[0] ?? '', MAX_TEXT);
-  }
-}
-
 /** The URL and method of a fetch's arguments. */
-function request(input: RequestInfo | URL, init: RequestInit | undefined): [method: string, url: string] {
+function request(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+): [method: string, url: string] {
   if (input instanceof Request) {
     return [init?.method ?? input.method, input.url];
   }
-  return [init?.method ?? 'GET', String(input)];
-}
-
-/** Whether `window` says the console is not to be heard. */
-export function consoleOff(document: Document): boolean {
-  return document.querySelector('meta[name="annotate-console"]')?.getAttribute('content')?.trim() === 'off';
+  return [init?.method ?? "GET", String(input)];
 }
 
 /** Hears the console of `window`. */
-function hearConsole(diagnostics: Diagnostics, window: Window & typeof globalThis): void {
-  const { console } = window;
-  for (const kind of ['error', 'warn'] as const) {
-    const original = console[kind].bind(console);
-    console[kind] = (...values: unknown[]) => {
+function hearConsole(
+  diagnostics: Diagnostics,
+  window: Window & typeof globalThis,
+): void {
+  const pageConsole = window.console;
+  for (const kind of ["error", "warn"] as const) {
+    const original = pageConsole[kind].bind(pageConsole);
+    pageConsole[kind] = (...values: unknown[]) => {
       diagnostics.recordValues(kind, values);
       original(...values);
     };
   }
-  window.addEventListener('error', (event) => diagnostics.recordValues('uncaught', [event.error ?? event.message]));
-  window.addEventListener('unhandledrejection', (event) => diagnostics.recordValues('rejection', [event.reason]));
+  window.addEventListener("error", (event) =>
+    diagnostics.recordValues("uncaught", [event.error ?? event.message]),
+  );
+  window.addEventListener("unhandledrejection", (event) =>
+    diagnostics.recordValues("rejection", [event.reason]),
+  );
 }
 
 /** Hears the requests of `window` that fail, through `fetch` and `XMLHttpRequest`; it gives the fetch it wrapped. */
-function hearRequests(diagnostics: Diagnostics, window: Window & typeof globalThis): typeof fetch {
+function hearRequests(
+  diagnostics: Diagnostics,
+  window: Window & typeof globalThis,
+): typeof fetch {
   const original = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const [method, url] = request(input, init);
@@ -127,7 +197,7 @@ function hearRequests(diagnostics: Diagnostics, window: Window & typeof globalTh
     url: string | URL,
     ...rest: unknown[]
   ) {
-    this.addEventListener('loadend', () => {
+    this.addEventListener("loadend", () => {
       if (this.status === 0 || this.status >= FAILED_STATUS) {
         diagnostics.recordRequest(method, String(url), this.status);
       }
@@ -153,7 +223,7 @@ export function hear(window: Window & typeof globalThis): Heard {
   }
   const diagnostics = new Diagnostics();
   let ownFetch = window.fetch.bind(window);
-  if (!consoleOff(window.document)) {
+  if (meta(window.document, "console") !== "off") {
     hearConsole(diagnostics, window);
     ownFetch = hearRequests(diagnostics, window);
   }

@@ -1,19 +1,26 @@
 // The record the client sends, built from a comment and its draft, with where it was made: the page's address, the
 // window, the browser and the build.
 
-import { browserInBrief, queryWithoutMode } from './address';
-import type { ConsoleEntry, Json, NewAnnotation } from './model';
-import type { Draft } from './state';
+import { browserInBrief, queryKept } from "./address";
+import type { ConsoleEntry, Json, NewAnnotation } from "./model";
+import type { Draft } from "./state";
 
-/** The app and build annotated. */
+/** The app and build annotated, and the query parameters whose values an annotation keeps. */
 export interface Build {
   app: string;
   version: string;
+  query: readonly string[];
 }
 
-/** The page's path and query, without the parameter that switched the mode on. */
-export function address(location: Location): { path: string; query: string } {
-  return { path: location.pathname === '' ? '/' : location.pathname, query: queryWithoutMode(location.search) };
+/** The page's path and its query as an annotation keeps it: its parameters' names, and the values of `allowed`. */
+export function address(
+  location: Location,
+  allowed: readonly string[],
+): { path: string; query: string } {
+  return {
+    path: location.pathname === "" ? "/" : location.pathname,
+    query: queryKept(location.search, allowed),
+  };
 }
 
 /** What an annotation carries beside its target: the app's context and the console's latest entries. */
@@ -30,7 +37,7 @@ export function annotation(
   window: Window,
   carried: Carried,
 ): NewAnnotation {
-  const { path, query } = address(window.location);
+  const { path, query } = address(window.location, build.query);
   const { crop, frame } = draft.pictures;
   return {
     app: build.app,
