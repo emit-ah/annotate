@@ -1,0 +1,3 @@
+# The image needs only the service's binary.
+*
+!build/target/release/annotations-server
