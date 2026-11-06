@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plain page</title>
+    <!-- annotate's settings, without JavaScript (ADR-0001). -->
+    <meta name="annotate-app" content="demo" />
+    <meta name="annotate-version" content="1.4.0" />
+    <link rel="stylesheet" href="/demo.css" />
+    <script src="/dist/annotate.js"></script>
+  </head>
+  <body>
+    <main data-annotate-component="Settings" data-annotate-state="view=settings; tab=account">
+      <h1>Account</h1>
+      <p>Change how the app greets you.</p>
+      <label for="nickname">Nickname</label>
+      <input id="nickname" value="Ada" />
+      <button type="button" data-annotate-id="settings-save">Save changes</button>
+      <section data-annotate-redact aria-label="Balance">
+        <h2>Balance</h2>
+        <p>4,200.00 EUR</p>
+      </section>
+      <section data-annotate-private>
+        <h2>Recovery codes</h2>
+        <p>alpha-bravo-charlie</p>
+      </section>
+    </main>
+  </body>
+</html>
