@@ -1,0 +1,35 @@
+# cargo deny: licences (EMIT ADR-0016), advisories, bans and sources of every dependency.
+[graph]
+all-features = true
+
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+unused-allowed-license = "allow"
+
+# Our own unpublished crates need no licence check.
+[licenses.private]
+ignore = true
+
+# A yanked version was withdrawn by its authors, often for a defect or a security problem.
+[advisories]
+yanked = "deny"
+
+[bans]
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

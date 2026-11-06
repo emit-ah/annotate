@@ -1,0 +1,41 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+publish = false
+license-file = "LICENSE"
+
+[workspace.dependencies]
+annotations = { version = "0.1.0", path = "crates/annotations" }
+anyhow = "1.0.104"
+axum = "0.8.9"
+base64 = "0.23.1"
+http-body-util = "0.1.5"
+png = "0.18.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "runtime-tokio", "migrate", "macros"] }
+thiserror = "2.0.21"
+tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "signal"] }
+tower = { version = "0.5.3", features = ["util"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.20", default-features = false, features = ["registry", "std"] }
+utoipa = "6.0.0"
+uuid = { version = "1.26.1", features = ["v7"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+dbg_macro = "warn"
+expect_used = "warn"
+panic = "warn"
+print_stderr = "warn"
+print_stdout = "warn"
+todo = "warn"
+unwrap_used = "warn"
