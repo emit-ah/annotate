@@ -16,6 +16,8 @@ pub const MAX_COMMENT: usize = 4_000;
 pub const MAX_TEXT: usize = 2_000;
 /// The most entries a list has, such as the state's, a region's elements or a canvas's items.
 pub const MAX_ITEMS: usize = 100;
+// The OpenAPI document repeats these limits as literals, which the service's test of `openapi.json` compares.
+
 /// The most bytes a picture has.
 pub const MAX_PNG_BYTES: usize = 2_000_000;
 /// The most characters an app's name has.
@@ -29,32 +31,45 @@ pub const MAX_CONSOLE: usize = 50;
 /// The most characters of a stack trace.
 pub const MAX_STACK: usize = 4_000;
 /// The most characters of a request's method or of a time.
-const MAX_WORD: usize = 64;
+pub const MAX_WORD: usize = 64;
 
 /// What the user wrote, about what, and where: the part of an annotation the client sends and the service gives back.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct AnnotationBody {
     /// The app or project annotated, a slug such as `mappa` or `tutti`.
+    #[cfg_attr(
+        feature = "openapi",
+        schema(max_length = 64, pattern = "^[a-z0-9_-]+$")
+    )]
     pub app: String,
     /// What the user says.
+    #[cfg_attr(feature = "openapi", schema(max_length = 4000))]
     pub comment: String,
     /// The page: the path of its address, such as `/practice/ode-to-joy`.
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub path: String,
     /// The query of its address, without the `?` and without the parameter that switched the mode on; empty for none.
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub query: String,
     /// The build annotated: a commit, with `+dirty` where its tree had changes, or a version such as `1.4.0`.
+    #[cfg_attr(
+        feature = "openapi",
+        schema(max_length = 64, pattern = "^[A-Za-z0-9._+-]+$")
+    )]
     pub version: String,
     /// The browser's window.
     pub viewport: Viewport,
     /// The browser and its version, in brief.
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub browser: String,
     /// What the comment is about.
     pub target: Target,
     /// What describes the view, such as the document, the zoom and the options, each by its name.
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(max_items = 100))]
     pub state: Vec<Entry>,
 }
 
@@ -77,6 +92,7 @@ pub struct NewAnnotation {
     pub context: Option<serde_json::Value>,
     /// The console's latest errors and warnings, uncaught errors and failed requests, the oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "openapi", schema(max_items = 50))]
     pub console: Vec<ConsoleEntry>,
 }
 
@@ -87,17 +103,22 @@ pub struct ConsoleEntry {
     /// What kind of entry.
     pub kind: ConsoleKind,
     /// When, in UTC, RFC 3339.
+    #[cfg_attr(feature = "openapi", schema(max_length = 64))]
     pub time: String,
     /// What it said.
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub message: String,
     /// Its stack trace, where it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(max_length = 4000))]
     pub stack: Option<String>,
     /// A failed request's method.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(max_length = 64))]
     pub method: Option<String>,
     /// A failed request's address, without its query.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub url: Option<String>,
     /// A failed request's HTTP status; 0 where no answer came.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -137,6 +158,7 @@ pub struct Annotation {
     pub status: Status,
     /// Claude's answer, where there is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(max_length = 4000))]
     pub answer: Option<String>,
     /// The commit that resolved it, where one did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -164,6 +186,7 @@ pub struct StatusUpdate {
     pub status: Option<Status>,
     /// The answer; empty to clear it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(max_length = 4000))]
     pub answer: Option<String>,
     /// The commit that resolved it; empty to clear it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -278,8 +301,10 @@ pub struct Rect {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Entry {
     /// Its name.
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub name: String,
     /// Its value.
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub value: String,
 }
 
@@ -303,22 +328,29 @@ pub enum Target {
 pub struct Element {
     /// Its role, given or implied by its tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub role: Option<String>,
     /// Its accessible name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub name: Option<String>,
     /// Its tag, such as `button`.
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub tag: String,
     /// The app's IDs of the texts it shows, such as the message IDs of its translations.
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(max_items = 100))]
     pub text_ids: Vec<String>,
     /// The start of its text.
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub text: String,
     /// The components it lies in, the outermost first, as their roots name them.
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(max_items = 100))]
     pub components: Vec<String>,
     /// Its path in the page, from the root, as tags with their place among their siblings.
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub dom_path: String,
     /// Where it lies in the window.
     pub rect: Rect,
@@ -332,10 +364,12 @@ pub struct Element {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CanvasItems {
     /// Which canvas, such as `notation` or `map`.
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub canvas: String,
     /// The point, as a rectangle without size, or the rectangle, in the canvas's CSS pixels.
     pub rect: Rect,
     /// What lies there, the nearest first.
+    #[cfg_attr(feature = "openapi", schema(max_items = 100))]
     pub hits: Vec<Hit>,
 }
 
@@ -344,11 +378,14 @@ pub struct CanvasItems {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Hit {
     /// Its kind, such as `note` or `card`.
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub kind: String,
     /// It in words, such as "G4, measure 2, beat 1, right hand".
+    #[cfg_attr(feature = "openapi", schema(max_length = 2000))]
     pub words: String,
     /// Its details by name, such as `pitch` and `measure`.
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(max_items = 100))]
     pub details: Vec<Entry>,
 }
 
@@ -360,9 +397,11 @@ pub struct Region {
     pub rect: Rect,
     /// The elements in it, the outermost that lie wholly in it.
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(max_items = 100))]
     pub elements: Vec<Element>,
     /// The canvas items in it.
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(max_items = 100))]
     pub items: Vec<CanvasItems>,
 }
 
@@ -468,8 +507,7 @@ impl NewAnnotation {
 }
 
 /// The bytes of `context` as compact JSON.
-#[must_use]
-pub fn context_bytes(context: &serde_json::Value) -> usize {
+fn context_bytes(context: &serde_json::Value) -> usize {
     context.to_string().len()
 }
 

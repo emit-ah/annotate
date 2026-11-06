@@ -8,24 +8,24 @@ use std::sync::Arc;
 
 use annotations::{
     Annotation, MAX_CONSOLE, MAX_CONTEXT_BYTES, MAX_PNG_BYTES, MAX_STACK, MAX_TEXT, NewAnnotation,
-    Status, StatusUpdate, is_app_name,
+    Status, StatusUpdate,
 };
-use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
-use axum::extract::{DefaultBodyLimit, FromRequest, FromRequestParts, Path, Query, Request, State};
-use axum::http::header::{
-    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS,
-};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, State};
+use axum::http::StatusCode;
+use axum::http::header::CONTENT_TYPE;
 use axum::http::request::Parts;
-use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
-use axum::middleware::{self, Next};
+use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use utoipa::OpenApi;
 
-use crate::store::{Attachment, Filter, Picture, Store, StoreError};
+use crate::guard::{guard_headers, loopback_hosts, same_origin_changes};
+use crate::pictures::check_png;
+use crate::problem::{ApiError, Body, Filters, Params, Problem};
+use crate::settings::Access;
+use crate::store::{Attachment, Filter, Picture, Store};
 
 /// The most bytes the console's entries have in JSON: each a message, an address and a stack, of characters of up to
 /// 4 bytes, escaped at worst to 6.
@@ -34,77 +34,11 @@ const CONSOLE_BYTES: usize = MAX_CONSOLE * (2 * MAX_TEXT + MAX_STACK) * 6;
 /// for the rest.
 const BODY_LIMIT: usize =
     2 * MAX_PNG_BYTES.div_ceil(3) * 4 + MAX_CONTEXT_BYTES + CONSOLE_BYTES + 1_000_000;
-/// The most pixels a picture has on either side.
-const MAX_PICTURE_SIDE: u32 = 16_384;
-/// The most bytes the check of a picture's header holds in memory, far below the service's limit.
-const PNG_CHECK_BYTES: usize = 1 << 20;
-
-/// Who may do what.
-#[derive(Debug, Clone, Default)]
-pub struct Access {
-    /// The header that names the caller, set by the reverse proxy; none where every caller is `local`.
-    pub user_header: Option<HeaderName>,
-    /// The callers who change statuses and answers, such as `claude`.
-    pub admins: Vec<String>,
-    /// The apps whose annotations the service keeps; any where none is named.
-    pub apps: Vec<String>,
-}
-
-impl Access {
-    /// Who may do what, from the service's settings by name: the caller's header from `ANNOTATIONS_USER_HEADER`,
-    /// the admins from `ANNOTATIONS_ADMINS` and the apps kept from `ANNOTATIONS_APPS`, both separated by commas.
-    /// Without a header the service runs open only where `ANNOTATIONS_OPEN` is `local`, so a slip of its settings
-    /// opens nothing.
-    ///
-    /// # Errors
-    ///
-    /// Where the header is no header's name, an app is no app's name, or neither the header nor
-    /// `ANNOTATIONS_OPEN=local` is set.
-    pub fn from_settings(setting: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
-        let setting = |name: &str| {
-            setting(name)
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-        };
-        let user_header = setting("ANNOTATIONS_USER_HEADER")
-            .map(|name| {
-                HeaderName::try_from(name)
-                    .map_err(|_| "ANNOTATIONS_USER_HEADER is no header name".to_owned())
-            })
-            .transpose()?;
-        if user_header.is_none() && setting("ANNOTATIONS_OPEN").as_deref() != Some("local") {
-            return Err(
-                "set ANNOTATIONS_USER_HEADER behind an auth proxy, or ANNOTATIONS_OPEN=local in the local stack only"
-                    .to_owned(),
-            );
-        }
-        let list = |name: &str| -> Vec<String> {
-            setting(name)
-                .unwrap_or_default()
-                .split(',')
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .map(str::to_owned)
-                .collect()
-        };
-        let apps = list("ANNOTATIONS_APPS");
-        if let Some(app) = apps.iter().find(|app| !is_app_name(app)) {
-            return Err(format!(
-                "ANNOTATIONS_APPS names {app}, which is no app's name"
-            ));
-        }
-        Ok(Self {
-            user_header,
-            admins: list("ANNOTATIONS_ADMINS"),
-            apps,
-        })
-    }
-
-    /// Whether the service keeps the annotations of `app`.
-    fn keeps(&self, app: &str) -> bool {
-        self.apps.is_empty() || self.apps.iter().any(|kept| kept == app)
-    }
-}
+/// The annotations a list holds where it names no limit, and the most it may name.
+const DEFAULT_LIST_LIMIT: u32 = 100;
+const MAX_LIST_LIMIT: u32 = 500;
+/// The name of every caller while the service runs open.
+const LOCAL_CALLER: &str = "local";
 
 #[derive(Clone)]
 struct App {
@@ -114,11 +48,12 @@ struct App {
 
 /// The service's routes over `store`, with `access`.
 pub fn router(store: Store, access: Access) -> Router {
+    let open = access.open();
     let app = App {
         store,
         access: Arc::new(access),
     };
-    Router::new()
+    let routes = Router::new()
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
         .route("/api/v1/annotations", get(list).post(create))
@@ -135,45 +70,15 @@ pub fn router(store: Store, access: Access) -> Router {
             )
         })
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
-        .layer(middleware::from_fn(same_origin_changes))
+        .layer(middleware::from_fn(same_origin_changes));
+    let routes = if open {
+        routes.layer(middleware::from_fn(loopback_hosts))
+    } else {
+        routes
+    };
+    routes
         .layer(middleware::from_fn(guard_headers))
         .with_state(app)
-}
-
-/// A request that changes something comes from the app's own pages or from a client that is no browser, such as `make
-/// annotation-status`: a browser marks a request another site makes with `Sec-Fetch-Site`, and as it sends the basic
-/// auth along by itself, the service refuses such a change rather than trust the proxy's login alone.
-async fn same_origin_changes(request: Request, next: Next) -> Response {
-    let changes = !matches!(*request.method(), Method::GET | Method::HEAD);
-    let cross_site = request
-        .headers()
-        .get(HeaderName::from_static("sec-fetch-site"))
-        .is_some_and(|site| site.as_bytes() != b"same-origin" && site.as_bytes() != b"none");
-    if changes && cross_site {
-        return ApiError::new(
-            StatusCode::FORBIDDEN,
-            "a change comes from the app's own pages only",
-        )
-        .into_response();
-    }
-    next.run(request).await
-}
-
-/// Every answer of the API: never sniffed, never run as a page, never cached, and never read by another site's page.
-async fn guard_headers(request: Request, next: Next) -> Response {
-    let mut response = next.run(request).await;
-    let headers = response.headers_mut();
-    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    headers.insert(
-        HeaderName::from_static("cross-origin-resource-policy"),
-        HeaderValue::from_static("same-origin"),
-    );
-    headers.insert(
-        CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static("default-src 'none'; frame-ancestors 'none'; sandbox"),
-    );
-    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
 }
 
 /// The API's OpenAPI document, which `openapi.json` holds as committed.
@@ -190,132 +95,6 @@ async fn guard_headers(request: Request, next: Next) -> Response {
 )]
 pub struct ApiDoc;
 
-/// A problem as RFC 9457 describes it.
-#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct Problem {
-    /// Always `about:blank`: the status tells the kind.
-    #[serde(rename = "type")]
-    pub kind: String,
-    /// The status in words.
-    pub title: String,
-    /// The HTTP status.
-    pub status: u16,
-    /// What went wrong here.
-    pub detail: String,
-}
-
-/// An error the API answers with as a problem.
-#[derive(Debug)]
-struct ApiError {
-    status: StatusCode,
-    detail: String,
-}
-
-impl ApiError {
-    fn new(status: StatusCode, detail: impl Into<String>) -> Self {
-        Self {
-            status,
-            detail: detail.into(),
-        }
-    }
-
-    fn not_found() -> Self {
-        Self::new(StatusCode::NOT_FOUND, "there is no such annotation")
-    }
-
-    fn invalid(detail: impl Into<String>) -> Self {
-        Self::new(StatusCode::UNPROCESSABLE_ENTITY, detail)
-    }
-}
-
-impl From<StoreError> for ApiError {
-    fn from(error: StoreError) -> Self {
-        if matches!(error, StoreError::Full) {
-            tracing::warn!("the database is full");
-            return Self::new(
-                StatusCode::INSUFFICIENT_STORAGE,
-                "the annotation service is full; annotations done go after 90 days",
-            );
-        }
-        tracing::error!(%error, "the store failed");
-        Self::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "the annotations could not be read or written",
-        )
-    }
-}
-
-impl From<JsonRejection> for ApiError {
-    fn from(rejection: JsonRejection) -> Self {
-        Self::new(rejection.status(), rejection.body_text())
-    }
-}
-
-impl From<QueryRejection> for ApiError {
-    fn from(rejection: QueryRejection) -> Self {
-        Self::new(rejection.status(), rejection.body_text())
-    }
-}
-
-impl From<PathRejection> for ApiError {
-    fn from(rejection: PathRejection) -> Self {
-        Self::new(rejection.status(), rejection.body_text())
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let problem = Problem {
-            kind: "about:blank".to_owned(),
-            title: self.status.canonical_reason().unwrap_or("Error").to_owned(),
-            status: self.status.as_u16(),
-            detail: self.detail,
-        };
-        (
-            self.status,
-            [(CONTENT_TYPE, "application/problem+json")],
-            Json(problem),
-        )
-            .into_response()
-    }
-}
-
-/// A JSON body, refused as a problem where it does not read.
-struct Body<T>(T);
-
-impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Body<T> {
-    type Rejection = ApiError;
-
-    async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let Json(value) = Json::<T>::from_request(request, state).await?;
-        Ok(Self(value))
-    }
-}
-
-/// A query, refused as a problem where it does not read.
-struct Filters<T>(T);
-
-impl<T: DeserializeOwned, S: Send + Sync> FromRequestParts<S> for Filters<T> {
-    type Rejection = ApiError;
-
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let Query(value) = Query::<T>::from_request_parts(parts, state).await?;
-        Ok(Self(value))
-    }
-}
-
-/// Path parameters, refused as a problem where they do not read.
-struct Params<T>(T);
-
-impl<T: DeserializeOwned + Send, S: Send + Sync> FromRequestParts<S> for Params<T> {
-    type Rejection = ApiError;
-
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let Path(value) = Path::<T>::from_request_parts(parts, state).await?;
-        Ok(Self(value))
-    }
-}
-
 /// Who calls, and whether they change statuses and answers.
 struct Caller {
     name: String,
@@ -328,15 +107,15 @@ impl FromRequestParts<App> for Caller {
     async fn from_request_parts(parts: &mut Parts, app: &App) -> Result<Self, Self::Rejection> {
         let Some(header) = &app.access.user_header else {
             return Ok(Self {
-                name: "local".to_owned(),
+                name: LOCAL_CALLER.to_owned(),
                 admin: true,
             });
         };
+        // Exactly as the proxy wrote it, which overwrites whatever the client sent in this header.
         let name = parts
             .headers
             .get(header)
             .and_then(|value| value.to_str().ok())
-            .map(str::trim)
             .filter(|name| !name.is_empty())
             .ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "the request names no user"))?;
         Ok(Self {
@@ -358,6 +137,8 @@ struct ListQuery {
     path: Option<String>,
     /// Only those of this version.
     version: Option<String>,
+    /// The most it holds: 100 where it names none, 500 at most.
+    limit: Option<u32>,
 }
 
 /// The service runs.
@@ -383,7 +164,8 @@ async fn ready(State(app): State<App>) -> Result<&'static str, ApiError> {
 /// The annotations, the newest first.
 #[utoipa::path(get, path = "/api/v1/annotations", params(ListQuery), responses(
     (status = 200, description = "The annotations, without their pictures.", body = [Annotation]),
-    (status = 400, description = "The query does not read.", body = Problem, content_type = "application/problem+json"),
+    (status = 400, description = "The query does not read, or its limit is out of range.", body = Problem, content_type = "application/problem+json"),
+    (status = 421, description = "The service runs open and the request is for another host than localhost.", body = Problem, content_type = "application/problem+json"),
     (status = 401, description = "No user is named.", body = Problem, content_type = "application/problem+json"),
 ))]
 async fn list(
@@ -391,11 +173,19 @@ async fn list(
     _caller: Caller,
     Filters(query): Filters<ListQuery>,
 ) -> Result<Json<Vec<Annotation>>, ApiError> {
+    let limit = query.limit.unwrap_or(DEFAULT_LIST_LIMIT);
+    if !(1..=MAX_LIST_LIMIT).contains(&limit) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            format!("limit is not between 1 and {MAX_LIST_LIMIT}"),
+        ));
+    }
     let filter = Filter {
         status: query.status,
         app: query.app,
         path: query.path,
         version: query.version,
+        limit,
     };
     Ok(Json(app.store.list(&filter).await?))
 }
@@ -433,25 +223,6 @@ async fn create(
     Ok((StatusCode::CREATED, Json(kept)))
 }
 
-/// Whether `bytes` begin as a PNG with sides of at most [`MAX_PICTURE_SIDE`] pixels. Only its header is read, within
-/// [`PNG_CHECK_BYTES`], past its colour profile and texts, so no picture can make the check take the service's memory.
-fn check_png(bytes: &[u8]) -> Result<(), &'static str> {
-    let mut decoder = png::Decoder::new_with_limits(
-        std::io::Cursor::new(bytes),
-        png::Limits {
-            bytes: PNG_CHECK_BYTES,
-        },
-    );
-    decoder.set_ignore_iccp_chunk(true);
-    decoder.set_ignore_text_chunk(true);
-    let reader = decoder.read_info().map_err(|_| "is no PNG")?;
-    let info = reader.info();
-    if info.width > MAX_PICTURE_SIDE || info.height > MAX_PICTURE_SIDE {
-        return Err("is larger than 16384 pixels on a side");
-    }
-    Ok(())
-}
-
 /// One annotation.
 #[utoipa::path(get, path = "/api/v1/annotations/{id}", params(("id" = String, Path, description = "Its ID.")), responses(
     (status = 200, description = "The annotation, without its pictures.", body = Annotation),
@@ -470,7 +241,7 @@ async fn one(
 }
 
 /// Changes an annotation: an admin its status, answer or resolving commit, and its author only reopens it, where it
-/// is done or won't be, which clears its commit.
+/// is done or won't be. Reopening clears its resolving commit.
 #[utoipa::path(patch, path = "/api/v1/annotations/{id}", params(("id" = String, Path, description = "Its ID.")),
     request_body = StatusUpdate, responses(
     (status = 200, description = "It is changed.", body = Annotation),
@@ -478,6 +249,7 @@ async fn one(
     (status = 404, description = "There is no such.", body = Problem, content_type = "application/problem+json"),
     (status = 409, description = "Its author reopens only what is done or won't be.", body = Problem, content_type = "application/problem+json"),
     (status = 422, description = "The change does not read or breaks a limit.", body = Problem, content_type = "application/problem+json"),
+    (status = 507, description = "The database holds as much as it may.", body = Problem, content_type = "application/problem+json"),
 ))]
 async fn update(
     State(app): State<App>,

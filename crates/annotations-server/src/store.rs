@@ -4,16 +4,24 @@
 
 use std::path::Path;
 use std::str::FromStr;
+use std::time::Duration;
 
 use annotations::{Annotation, AnnotationBody, NewAnnotation, Status, StatusUpdate};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{FromRow, SqlitePool};
 
-/// The time now in UTC as RFC 3339, as SQLite writes it. Queries are literals, which sqlx asks for against injection,
-/// so their shared parts are macros.
+/// A time in UTC as RFC 3339, as SQLite writes it: now, or now moved by the modifier that follows it in the query.
+/// Queries are literals, which sqlx asks for against injection, so their shared parts are macros.
+macro_rules! utc {
+    () => {
+        "strftime('%Y-%m-%dT%H:%M:%fZ', 'now'"
+    };
+}
+
+/// The time now in UTC as RFC 3339.
 macro_rules! now {
     () => {
-        "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+        concat!(utc!(), ")")
     };
 }
 
@@ -24,6 +32,10 @@ pub const MAX_PAGES: u32 = 262_144;
 
 /// SQLite's code for a database that is full.
 const SQLITE_FULL: &str = "13";
+/// The connections to the database file: SQLite writes through one at a time, and reads beside it.
+const POOL_CONNECTIONS: u32 = 4;
+/// How often a running service purges what is done.
+pub const PURGE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// The columns of a [`Row`].
 macro_rules! columns {
@@ -75,7 +87,7 @@ impl StoreError {
 }
 
 /// Which annotations a list holds; what it leaves out does not filter.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Filter {
     /// Only those of this status.
     pub status: Option<Status>,
@@ -85,6 +97,21 @@ pub struct Filter {
     pub path: Option<String>,
     /// Only those of this version.
     pub version: Option<String>,
+    /// The most it holds.
+    pub limit: u32,
+}
+
+impl Default for Filter {
+    /// Every annotation.
+    fn default() -> Self {
+        Self {
+            status: None,
+            app: None,
+            path: None,
+            version: None,
+            limit: u32::MAX,
+        }
+    }
 }
 
 /// One of an annotation's pictures.
@@ -167,7 +194,7 @@ impl Store {
             .pragma("max_page_count", MAX_PAGES.to_string());
         Self::with(
             SqlitePoolOptions::new()
-                .max_connections(4)
+                .max_connections(POOL_CONNECTIONS)
                 .connect_with(options)
                 .await?,
         )
@@ -219,11 +246,21 @@ impl Store {
     ///
     /// Where the database fails.
     pub async fn purge(&self) -> Result<u64, StoreError> {
-        let removed = sqlx::query(
-            "DELETE FROM annotations WHERE status IN ('done', 'wont_do') \
-             AND updated < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1)",
-        )
-        .bind(format!("-{KEEP_RESOLVED_DAYS} days"))
+        self.purge_after(KEEP_RESOLVED_DAYS).await
+    }
+
+    /// Removes the annotations done, or not to be done, for more than `days` days; how many.
+    ///
+    /// # Errors
+    ///
+    /// Where the database fails.
+    pub async fn purge_after(&self, days: u32) -> Result<u64, StoreError> {
+        let removed = sqlx::query(concat!(
+            "DELETE FROM annotations WHERE status IN ('done', 'wont_do') AND updated < ",
+            utc!(),
+            ", ?1)"
+        ))
+        .bind(format!("-{days} days"))
         .execute(&self.pool)
         .await?;
         Ok(removed.rows_affected())
@@ -317,12 +354,13 @@ impl Store {
             " FROM annotations \
              WHERE (?1 IS NULL OR status = ?1) AND (?2 IS NULL OR app = ?2) AND (?3 IS NULL OR path = ?3) \
              AND (?4 IS NULL OR version = ?4) \
-             ORDER BY created DESC, id DESC"
+             ORDER BY created DESC, id DESC LIMIT ?5"
         ))
         .bind(filter.status.map(Status::as_str))
         .bind(filter.app.as_deref())
         .bind(filter.path.as_deref())
         .bind(filter.version.as_deref())
+        .bind(i64::from(filter.limit))
         .fetch_all(&self.pool)
         .await?
         .into_iter()
@@ -369,7 +407,7 @@ impl Store {
     }
 
     /// Applies `update` to the annotation `id` and gives it back; none where there is no such. What it leaves out
-    /// stays, and an empty answer or commit clears it.
+    /// stays, an empty answer or commit clears it, and reopening clears the resolving commit unless it names one.
     ///
     /// # Errors
     ///
@@ -382,7 +420,8 @@ impl Store {
         let changed = sqlx::query(concat!(
             "UPDATE annotations SET status = coalesce(?2, status), \
              answer = CASE WHEN ?3 IS NULL THEN answer ELSE nullif(?3, '') END, \
-             resolved_in = CASE WHEN ?4 IS NULL THEN resolved_in ELSE nullif(?4, '') END, updated = ",
+             resolved_in = CASE WHEN ?4 IS NOT NULL THEN nullif(?4, '') \
+             WHEN ?2 = 'open' THEN NULL ELSE resolved_in END, updated = ",
             now!(),
             " WHERE id = ?1"
         ))
@@ -391,7 +430,8 @@ impl Store {
         .bind(update.answer.as_deref())
         .bind(update.resolved_in.as_deref())
         .execute(&self.pool)
-        .await?;
+        .await
+        .map_err(StoreError::of_write)?;
         if changed.rows_affected() == 0 {
             return Ok(None);
         }
@@ -413,7 +453,8 @@ impl Store {
         .bind(id)
         .bind(author)
         .execute(&self.pool)
-        .await?;
+        .await
+        .map_err(StoreError::of_write)?;
         if changed.rows_affected() == 0 {
             return Ok(None);
         }
@@ -435,4 +476,20 @@ impl Store {
         .await?;
         Ok(removed.rows_affected() > 0)
     }
+}
+
+/// Purges, every `every`, what is done for more than `days` days, while the service runs; the first purge comes after
+/// `every`, as opening the store purges. A failure is logged, and the next purge comes all the same.
+pub fn purge_every(store: Store, every: Duration, days: u32) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticks = tokio::time::interval(every);
+        ticks.tick().await;
+        loop {
+            ticks.tick().await;
+            match store.purge_after(days).await {
+                Ok(removed) => tracing::info!(removed, "annotations done were purged"),
+                Err(error) => tracing::error!(%error, "the purge failed"),
+            }
+        }
+    })
 }

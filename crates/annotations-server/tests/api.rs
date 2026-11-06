@@ -5,7 +5,8 @@
     reason = "a helper fails its test where the test's own setup fails, such as a request that does not build"
 )]
 
-use annotations_server::api::{Access, router};
+use annotations_server::api::router;
+use annotations_server::settings::Access;
 use annotations_server::store::Store;
 use axum::Router;
 use axum::body::Body;
@@ -24,9 +25,25 @@ fn png(width: u32, height: u32) -> Vec<u8> {
         encoder.set_color(png::ColorType::Grayscale);
         encoder.set_depth(png::BitDepth::Eight);
         let pixels = vec![128; (width * height) as usize];
-        if let Ok(mut writer) = encoder.write_header() {
-            let _ = writer.write_image_data(&pixels);
-        }
+        let mut writer = encoder.write_header().expect("a PNG's header");
+        writer.write_image_data(&pixels).expect("a PNG's pixels");
+    }
+    bytes
+}
+
+/// The start of a PNG that says it has `width` by `height` pixels, as far as a check of its header reads: its
+/// header and an empty first chunk of data, without the pixels it promises.
+fn png_header(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
+        encoder.set_color(png::ColorType::Grayscale);
+        let mut writer = encoder.write_header().expect("a PNG's header");
+        writer
+            .write_chunk(png::chunk::IDAT, &[])
+            .expect("an empty chunk of data");
+        // The writer would add the pixels it lacks as it ends; the check reads no further than this.
+        std::mem::forget(writer);
     }
     bytes
 }
@@ -82,7 +99,10 @@ async fn call(
     user: Option<&str>,
     body: Option<Value>,
 ) -> (StatusCode, Value, String) {
-    let mut request = Request::builder().method(method).uri(uri);
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("host", "localhost:8080");
     if let Some(user) = user {
         request = request.header(USER, user);
     }
@@ -465,8 +485,6 @@ async fn behind_the_proxy_a_request_without_a_user_is_refused() {
         (StatusCode::UNAUTHORIZED, "application/problem+json")
     );
     assert_eq!(problem["detail"], json!("the request names no user"));
-    let (status, _, _) = call(&app, Method::GET, "/api/v1/annotations", Some(" "), None).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -664,48 +682,6 @@ async fn the_service_tells_compose_that_it_runs_and_is_ready() {
     }
 }
 
-#[test]
-fn the_service_runs_open_only_where_its_settings_say_local_and_names_its_admins() {
-    let settings = |pairs: &'static [(&'static str, &'static str)]| {
-        move |name: &str| {
-            pairs
-                .iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, value)| (*value).to_owned())
-        }
-    };
-    assert!(Access::from_settings(settings(&[])).is_err());
-    assert!(Access::from_settings(settings(&[("ANNOTATIONS_OPEN", "yes")])).is_err());
-    let open = Access::from_settings(settings(&[("ANNOTATIONS_OPEN", "local")]))
-        .expect("open where local");
-    assert!(open.user_header.is_none());
-    let proxied = Access::from_settings(settings(&[
-        ("ANNOTATIONS_USER_HEADER", "X-Auth-User"),
-        ("ANNOTATIONS_ADMINS", " claude, ,ben"),
-    ]))
-    .expect("behind a proxy");
-    assert_eq!(
-        proxied.user_header,
-        Some(HeaderName::from_static("x-auth-user"))
-    );
-    assert_eq!(proxied.admins, ["claude", "ben"]);
-    assert!(proxied.apps.is_empty());
-    assert!(Access::from_settings(settings(&[("ANNOTATIONS_USER_HEADER", "no header")])).is_err());
-    let named = Access::from_settings(settings(&[
-        ("ANNOTATIONS_OPEN", "local"),
-        ("ANNOTATIONS_APPS", "mappa, tutti"),
-    ]))
-    .expect("open with apps");
-    assert_eq!(named.apps, ["mappa", "tutti"]);
-    assert!(
-        Access::from_settings(settings(&[
-            ("ANNOTATIONS_OPEN", "local"),
-            ("ANNOTATIONS_APPS", "Mappa"),
-        ]))
-        .is_err()
-    );
-}
-
 /// The body of `uri`'s answer as `user`, with its status and content type, as bytes.
 async fn fetch_part(app: &Router, uri: &str) -> (StatusCode, String, Vec<u8>) {
     let request = Request::get(uri)
@@ -833,4 +809,239 @@ async fn a_full_database_says_so_and_keeps_what_it_has() {
     );
     let (_, list, _) = call(&app, Method::GET, "/api/v1/annotations", None, None).await;
     assert_eq!(list.as_array().map(Vec::len), Some(1));
+}
+
+#[tokio::test]
+async fn open_it_answers_only_requests_for_the_loopback_s_names() {
+    let app = router(
+        Store::in_memory().await.expect("a store in memory"),
+        Access::default(),
+    );
+    for host in [
+        "localhost",
+        "localhost:8080",
+        "127.0.0.1:8080",
+        "[::1]:8080",
+    ] {
+        let request = Request::get("/api/v1/annotations")
+            .header("host", host)
+            .body(Body::empty())
+            .expect("a request");
+        let response = app.clone().oneshot(request).await.expect("an answer");
+        assert_eq!(response.status(), StatusCode::OK, "{host}");
+    }
+    // A page of another site whose name points at the loopback, as by DNS rebinding.
+    for host in [
+        Some("evil.example"),
+        Some("localhost.evil.example:8080"),
+        None,
+    ] {
+        let mut request = Request::get("/api/v1/annotations");
+        if let Some(host) = host {
+            request = request.header("host", host);
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::empty()).expect("a request"))
+            .await
+            .expect("an answer");
+        assert_eq!(
+            response.status(),
+            StatusCode::MISDIRECTED_REQUEST,
+            "{host:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_caller_is_named_exactly_as_the_proxy_wrote_it() {
+    let app = behind_proxy().await;
+    let (_, kept, _) = call(
+        &app,
+        Method::POST,
+        "/api/v1/annotations",
+        Some("andreas "),
+        Some(repeat_button()),
+    )
+    .await;
+    assert_eq!(kept["author"], json!("andreas "));
+    let uri = format!(
+        "/api/v1/annotations/{}",
+        kept["id"].as_str().expect("an id")
+    );
+    // A name with space around it is no admin's.
+    let (status, _, _) = call(
+        &app,
+        Method::PATCH,
+        &uri,
+        Some(" claude"),
+        Some(json!({"status": "done"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _, _) = call(&app, Method::GET, "/api/v1/annotations", Some(""), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn a_picture_of_more_pixels_than_the_service_takes_is_refused_before_its_pixels_are_read() {
+    let app = behind_proxy().await;
+    let mut huge = repeat_button();
+    huge["crop"] = json!(base64(&png_header(16_384, 16_384)));
+    let (status, problem, _) = call(
+        &app,
+        Method::POST,
+        "/api/v1/annotations",
+        Some("andreas"),
+        Some(huge),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        problem["detail"],
+        json!("crop has more than 40000000 pixels")
+    );
+    let mut wide_enough = repeat_button();
+    wide_enough["crop"] = json!(base64(&png_header(6_000, 6_000)));
+    let (status, _, _) = call(
+        &app,
+        Method::POST,
+        "/api/v1/annotations",
+        Some("andreas"),
+        Some(wide_enough),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn a_change_on_a_full_database_says_so() {
+    let app = router(
+        Store::in_memory_of(12).await.expect("a small store"),
+        Access::default(),
+    );
+    let mut ids = Vec::new();
+    loop {
+        let (status, kept, _) = call(
+            &app,
+            Method::POST,
+            "/api/v1/annotations",
+            None,
+            Some(repeat_button()),
+        )
+        .await;
+        if status != StatusCode::CREATED {
+            assert_eq!(status, StatusCode::INSUFFICIENT_STORAGE);
+            break;
+        }
+        ids.push(kept["id"].as_str().expect("an id").to_owned());
+    }
+    let first = ids.first().expect("one annotation kept");
+    let (status, problem, _) = call(
+        &app,
+        Method::PATCH,
+        &format!("/api/v1/annotations/{first}"),
+        None,
+        Some(json!({"answer": "x".repeat(annotations::MAX_COMMENT)})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INSUFFICIENT_STORAGE);
+    assert_eq!(
+        problem["detail"],
+        json!("the annotation service is full; annotations done go after 90 days")
+    );
+}
+
+#[tokio::test]
+async fn a_list_holds_at_most_its_limit() {
+    let app = behind_proxy().await;
+    for _ in 0..3 {
+        call(
+            &app,
+            Method::POST,
+            "/api/v1/annotations",
+            Some("andreas"),
+            Some(repeat_button()),
+        )
+        .await;
+    }
+    let (_, two, _) = call(
+        &app,
+        Method::GET,
+        "/api/v1/annotations?limit=2",
+        Some("andreas"),
+        None,
+    )
+    .await;
+    assert_eq!(two.as_array().map(Vec::len), Some(2));
+    let (_, all, _) = call(
+        &app,
+        Method::GET,
+        "/api/v1/annotations",
+        Some("andreas"),
+        None,
+    )
+    .await;
+    assert_eq!(all.as_array().map(Vec::len), Some(3));
+    for limit in ["0", "501"] {
+        let (status, problem, _) = call(
+            &app,
+            Method::GET,
+            &format!("/api/v1/annotations?limit={limit}"),
+            Some("andreas"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{limit}");
+        assert_eq!(problem["detail"], json!("limit is not between 1 and 500"));
+    }
+}
+
+#[tokio::test]
+async fn an_admin_who_reopens_an_annotation_clears_its_resolving_commit() {
+    let app = behind_proxy().await;
+    let (_, kept, _) = call(
+        &app,
+        Method::POST,
+        "/api/v1/annotations",
+        Some("andreas"),
+        Some(repeat_button()),
+    )
+    .await;
+    let uri = format!(
+        "/api/v1/annotations/{}",
+        kept["id"].as_str().expect("an id")
+    );
+    call(
+        &app,
+        Method::PATCH,
+        &uri,
+        Some("claude"),
+        Some(json!({"status": "done", "resolved_in": "5c1e9a2", "answer": "Done."})),
+    )
+    .await;
+    let (_, reopened, _) = call(
+        &app,
+        Method::PATCH,
+        &uri,
+        Some("claude"),
+        Some(json!({"status": "open"})),
+    )
+    .await;
+    assert!(reopened.get("resolved_in").is_none());
+    assert_eq!(reopened["answer"], json!("Done."));
+}
+
+#[tokio::test]
+async fn the_service_is_not_ready_once_its_database_is_closed() {
+    let store = Store::in_memory().await.expect("a store in memory");
+    let app = router(store.clone(), Access::default());
+    store.close().await;
+    let (status, _, kind) = call(&app, Method::GET, "/health/ready", None, None).await;
+    assert_eq!(
+        (status, kind.as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, "application/problem+json")
+    );
+    let (status, _, _) = call(&app, Method::GET, "/health/live", None, None).await;
+    assert_eq!(status, StatusCode::OK);
 }

@@ -3,4 +3,8 @@
 //! local stack and its dev deployment only.
 
 pub mod api;
+mod guard;
+mod pictures;
+mod problem;
+pub mod settings;
 pub mod store;

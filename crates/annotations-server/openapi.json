@@ -50,6 +50,17 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most it holds: 100 where it names none, 500 at most.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
           }
         ],
         "responses": {
@@ -67,7 +78,7 @@
             }
           },
           "400": {
-            "description": "The query does not read.",
+            "description": "The query does not read, or its limit is out of range.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -78,6 +89,16 @@
           },
           "401": {
             "description": "No user is named.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "The service runs open and the request is for another host than localhost.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -248,7 +269,7 @@
       },
       "patch": {
         "tags": [],
-        "summary": "Changes an annotation: an admin its status, answer or resolving commit, and its author only reopens it, where it\nis done or won't be, which clears its commit.",
+        "summary": "Changes an annotation: an admin its status, answer or resolving commit, and its author only reopens it, where it\nis done or won't be. Reopening clears its resolving commit.",
         "operationId": "update",
         "parameters": [
           {
@@ -314,6 +335,16 @@
           },
           "422": {
             "description": "The change does not read or breaks a limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "The database holds as much as it may.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -444,7 +475,8 @@
                   "string",
                   "null"
                 ],
-                "description": "Claude's answer, where there is one."
+                "description": "Claude's answer, where there is one.",
+                "maxLength": 4000
               },
               "author": {
                 "type": "string",
@@ -508,30 +540,37 @@
         "properties": {
           "app": {
             "type": "string",
-            "description": "The app or project annotated, a slug such as `mappa` or `tutti`."
+            "description": "The app or project annotated, a slug such as `mappa` or `tutti`.",
+            "maxLength": 64,
+            "pattern": "^[a-z0-9_-]+$"
           },
           "browser": {
             "type": "string",
-            "description": "The browser and its version, in brief."
+            "description": "The browser and its version, in brief.",
+            "maxLength": 2000
           },
           "comment": {
             "type": "string",
-            "description": "What the user says."
+            "description": "What the user says.",
+            "maxLength": 4000
           },
           "path": {
             "type": "string",
-            "description": "The page: the path of its address, such as `/practice/ode-to-joy`."
+            "description": "The page: the path of its address, such as `/practice/ode-to-joy`.",
+            "maxLength": 2000
           },
           "query": {
             "type": "string",
-            "description": "The query of its address, without the `?` and without the parameter that switched the mode on; empty for none."
+            "description": "The query of its address, without the `?` and without the parameter that switched the mode on; empty for none.",
+            "maxLength": 2000
           },
           "state": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Entry"
             },
-            "description": "What describes the view, such as the document, the zoom and the options, each by its name."
+            "description": "What describes the view, such as the document, the zoom and the options, each by its name.",
+            "maxItems": 100
           },
           "target": {
             "$ref": "#/components/schemas/Target",
@@ -539,7 +578,9 @@
           },
           "version": {
             "type": "string",
-            "description": "The build annotated: a commit, with `+dirty` where its tree had changes, or a version such as `1.4.0`."
+            "description": "The build annotated: a commit, with `+dirty` where its tree had changes, or a version such as `1.4.0`.",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9._+-]+$"
           },
           "viewport": {
             "$ref": "#/components/schemas/Viewport",
@@ -558,14 +599,16 @@
         "properties": {
           "canvas": {
             "type": "string",
-            "description": "Which canvas, such as `notation` or `map`."
+            "description": "Which canvas, such as `notation` or `map`.",
+            "maxLength": 2000
           },
           "hits": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Hit"
             },
-            "description": "What lies there, the nearest first."
+            "description": "What lies there, the nearest first.",
+            "maxItems": 100
           },
           "rect": {
             "$ref": "#/components/schemas/Rect",
@@ -588,21 +631,24 @@
           },
           "message": {
             "type": "string",
-            "description": "What it said."
+            "description": "What it said.",
+            "maxLength": 2000
           },
           "method": {
             "type": [
               "string",
               "null"
             ],
-            "description": "A failed request's method."
+            "description": "A failed request's method.",
+            "maxLength": 64
           },
           "stack": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Its stack trace, where it has one."
+            "description": "Its stack trace, where it has one.",
+            "maxLength": 4000
           },
           "status": {
             "type": [
@@ -615,14 +661,16 @@
           },
           "time": {
             "type": "string",
-            "description": "When, in UTC, RFC 3339."
+            "description": "When, in UTC, RFC 3339.",
+            "maxLength": 64
           },
           "url": {
             "type": [
               "string",
               "null"
             ],
-            "description": "A failed request's address, without its query."
+            "description": "A failed request's address, without its query.",
+            "maxLength": 2000
           }
         }
       },
@@ -651,18 +699,21 @@
             "items": {
               "type": "string"
             },
-            "description": "The components it lies in, the outermost first, as their roots name them."
+            "description": "The components it lies in, the outermost first, as their roots name them.",
+            "maxItems": 100
           },
           "dom_path": {
             "type": "string",
-            "description": "Its path in the page, from the root, as tags with their place among their siblings."
+            "description": "Its path in the page, from the root, as tags with their place among their siblings.",
+            "maxLength": 2000
           },
           "name": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Its accessible name."
+            "description": "Its accessible name.",
+            "maxLength": 2000
           },
           "rect": {
             "$ref": "#/components/schemas/Rect",
@@ -677,22 +728,26 @@
               "string",
               "null"
             ],
-            "description": "Its role, given or implied by its tag."
+            "description": "Its role, given or implied by its tag.",
+            "maxLength": 2000
           },
           "tag": {
             "type": "string",
-            "description": "Its tag, such as `button`."
+            "description": "Its tag, such as `button`.",
+            "maxLength": 2000
           },
           "text": {
             "type": "string",
-            "description": "The start of its text."
+            "description": "The start of its text.",
+            "maxLength": 2000
           },
           "text_ids": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "The app's IDs of the texts it shows, such as the message IDs of its translations."
+            "description": "The app's IDs of the texts it shows, such as the message IDs of its translations.",
+            "maxItems": 100
           }
         }
       },
@@ -706,11 +761,13 @@
         "properties": {
           "name": {
             "type": "string",
-            "description": "Its name."
+            "description": "Its name.",
+            "maxLength": 2000
           },
           "value": {
             "type": "string",
-            "description": "Its value."
+            "description": "Its value.",
+            "maxLength": 2000
           }
         }
       },
@@ -727,15 +784,18 @@
             "items": {
               "$ref": "#/components/schemas/Entry"
             },
-            "description": "Its details by name, such as `pitch` and `measure`."
+            "description": "Its details by name, such as `pitch` and `measure`.",
+            "maxItems": 100
           },
           "kind": {
             "type": "string",
-            "description": "Its kind, such as `note` or `card`."
+            "description": "Its kind, such as `note` or `card`.",
+            "maxLength": 2000
           },
           "words": {
             "type": "string",
-            "description": "It in words, such as \"G4, measure 2, beat 1, right hand\"."
+            "description": "It in words, such as \"G4, measure 2, beat 1, right hand\".",
+            "maxLength": 2000
           }
         }
       },
@@ -753,7 +813,8 @@
                 "items": {
                   "$ref": "#/components/schemas/ConsoleEntry"
                 },
-                "description": "The console's latest errors and warnings, uncaught errors and failed requests, the oldest first."
+                "description": "The console's latest errors and warnings, uncaught errors and failed requests, the oldest first.",
+                "maxItems": 50
               },
               "context": {
                 "description": "What the app attached as the annotation was saved, such as a trace of its last steps: any JSON of at most\n[`MAX_CONTEXT_BYTES`]. The app decides what it holds and redacts it; the service keeps it as data."
@@ -864,14 +925,16 @@
             "items": {
               "$ref": "#/components/schemas/Element"
             },
-            "description": "The elements in it, the outermost that lie wholly in it."
+            "description": "The elements in it, the outermost that lie wholly in it.",
+            "maxItems": 100
           },
           "items": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/CanvasItems"
             },
-            "description": "The canvas items in it."
+            "description": "The canvas items in it.",
+            "maxItems": 100
           },
           "rect": {
             "$ref": "#/components/schemas/Rect",
@@ -898,7 +961,8 @@
               "string",
               "null"
             ],
-            "description": "The answer; empty to clear it."
+            "description": "The answer; empty to clear it.",
+            "maxLength": 4000
           },
           "resolved_in": {
             "type": [
