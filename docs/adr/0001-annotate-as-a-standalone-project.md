@@ -1,6 +1,6 @@
 # ADR-0001: annotate as a standalone project
 
-Status: accepted (2026-11-06), amended (2026-11-06): runtime context
+Status: accepted (2026-11-06), amended (2026-11-06): runtime context, and the findings of two reviews
 
 ## Context
 
@@ -68,9 +68,14 @@ Status: accepted (2026-11-06), amended (2026-11-06): runtime context
 - **The console.** Without the app doing anything, the client keeps a ring of the latest `MAX_CONSOLE` (50)
   entries:
   - `console.error` and `console.warn`, uncaught errors and unhandled rejections, with their stack traces;
-  - failed `fetch` and `XMLHttpRequest` calls, by method, address without its query, and status.
+  - failed `fetch` and `XMLHttpRequest` calls, by method, path and status.
   Messages are cut at 2,000 characters and stacks at 4,000. Each annotation carries them as `console`, served as
   `console.json`. `<meta name="annotate-console" content="off">` or `configure({console: false})` turns it off.
+- **The console is scrubbed before it is kept:** queries, Bearer and Basic tokens and `key=value` secrets (`token`,
+  `key`, `code`, `password`, `secret`, `auth…`) go; objects are named by their keys or their class, never by their
+  values; a `data:` or `blob:` address keeps its scheme only; a path segment that looks like a token (20 or more
+  letters and digits with a digit) becomes `:token`. A secret of another shape in a message stays; an app that logs
+  such secrets turns the capture off.
 - Both are untrusted data, as comments are; the CLI strips control characters from what it prints. Both count
   toward the database's 1 GiB, which a full database answers with 507 rather than a failure.
 
@@ -84,30 +89,41 @@ Status: accepted (2026-11-06), amended (2026-11-06): runtime context
 - **`crates/annotations-server`**: Axum on tokio with SQLite through sqlx, ported from tutti:
   - the API `/api/v1/annotations`, every error as problem details of RFC 9457, `/health/live` and `/health/ready`;
   - an OpenAPI document from the code, committed as `openapi.json`, which a test compares;
-  - lists filter by app, status, path and version;
+  - lists filter by app, status, path and version, and hold 100 annotations, 500 at most;
   - `ANNOTATIONS_APPS` optionally limits which apps an instance keeps;
   - it fails closed: it starts only with `ANNOTATIONS_USER_HEADER` behind an auth proxy, or with
-    `ANNOTATIONS_OPEN=local`;
+    `ANNOTATIONS_OPEN=local`, which listens on the loopback only and answers requests for `localhost`,
+    `127.0.0.1` and `[::1]` only, so another site cannot reach it through DNS rebinding;
+  - it takes the caller's name exactly as the proxy wrote it; the proxy must overwrite that header on every
+    request;
   - the admins in `ANNOTATIONS_ADMINS` change statuses, answers and resolving commits; any other caller creates
     and reads, removes their own while open and reopens their own once done;
   - changes that a browser marks as cross-site (`Sec-Fetch-Site`) are refused; every answer carries
     `Cross-Origin-Resource-Policy: same-origin`, `nosniff`, a sandboxing CSP and `no-store`;
-  - pictures are PNG of at most 2 MB, whose headers the service checks within 1 MiB;
-  - annotations done or not to be done go after 90 days, and the database holds at most 1 GiB.
+  - pictures are PNG of at most 2 MB, 16,384 pixels on a side and 40 million pixels in all, whose headers the
+    service checks within 1 MiB;
+  - annotations done or not to be done go after 90 days, purged when the service starts and every day while it
+    runs; the database holds at most 1 GiB, and a change it cannot hold answers 507.
 - **`client/`**: the TypeScript web component, ported from tutti's `app/src/annotate/`:
-  - `Alt+Shift+A` or `?annotate` switches it on, Escape off;
+  - `Alt+Shift+A` or `?annotate` switches it on; Escape goes back a step (the comment, a region's corner, the
+    list) and then switches it off;
   - one overlay layer with outline, numbered pins, popover and list;
   - pins go to an element, a canvas item or a dragged region (or two clicks, WCAG 2.5.7);
   - the record keeps the version, the page, the window, the view's state and the target by role, accessible
     name and text IDs, plus a crop and a half-size frame in PNG where the user shares the tab;
-  - an outbox in IndexedDB holds annotations until the service has them;
+  - an outbox in IndexedDB holds annotations until the service has them, a week at most; it sends only the
+    current app's, and drops what the service refuses (as after a login that ran out) with a notice;
+  - it sends only to a service on the page's own host;
   - where no service answers, the mode says so and keeps nothing.
-- **The CLI**: `mk/annotations.mk`, a Makefile include that a project copies or includes. It needs only curl and
+- **The CLI**: `cli/annotations.mk`, a Makefile include that a project copies or includes. It needs only curl and
   jq, and is taken over from tutti's `mk/annotations.mk`:
   - `make annotations` lists the open annotations of the project's app;
   - `make annotation ID=<id>` fetches one with its pictures, context and console into `local/annotations/<id>/`;
   - `make annotation-status ID=<id> STATUS=done COMMIT=<sha> NOTE=<answer>` answers one;
-  - control characters in untrusted text are stripped before they reach the terminal.
+  - control characters, bidi overrides and zero-width characters in untrusted text are stripped before they reach
+    the terminal;
+  - what a caller gives on the command line is taken as text, never expanded by make, checked before a shell sees
+    it, and passed through the environment; an address other than localhost needs https and the netrc.
 
 ### Adapter hooks
 
@@ -116,7 +132,7 @@ The host app may register these; each has a zero-JS default.
 | Hook | Gives | Default without it |
 | --- | --- | --- |
 | `version()` | the commit or version of the build | `<meta name="annotate-version">`; without either, the mode keeps nothing |
-| `describeCanvas(input)` | what a canvas or `[data-annotate-canvas]` element shows at a point or in a rectangle, in the app's words (Mappa: the card under the pointer; tutti: the notes) | the canvas by its name, without hits |
+| `canvas(query)` | what a canvas or `[data-annotate-canvas]` element shows at a point or in a rectangle, in the app's words (Mappa: the card under the pointer; tutti: the notes) | the canvas by its name, without hits |
 | `textIds(texts)` | the app's text IDs for an element's texts | the `data-annotate-id` values in the element |
 | `state()` | the view's state as name and value pairs | the `data-annotate-state` attributes on the page |
 | `redact(record)` | the record to keep, changed as the app wants, or `null` to deny it | the record as `data-annotate-redact` and `data-annotate-private` left it |
@@ -134,6 +150,12 @@ The host app may register these; each has a zero-JS default.
 - `data-annotate-redact` keeps an element's role, tag and `data-annotate-id`, drops its name and text, and paints
   its pixels over in pictures.
 - `data-annotate-private` does the same, and the element cannot be a target at all; regions skip it.
+- Both reach into open shadow roots, cover `data-annotate-state` and canvases (a redacted canvas keeps only the kind
+  of what it shows), and paint over with a margin. A cross-origin frame is out of the client's reach: the app marks
+  the frame itself.
+- The page's query keeps the names of its parameters only, and the values of those the app allows
+  (`<meta name="annotate-query">` or `configure({query})`).
+- Any link with `?annotate` switches the mode on, but nothing is sent until the user writes a comment and saves it.
 - `pictures()` returning `false` skips the question whether to share the tab.
 - `redact(record)` sees the final record and may change or deny it. Mappa uses it to keep only a card's ID and
   type in real vaults, and full content only in its demo.
@@ -164,8 +186,12 @@ The host app may register these; each has a zero-JS default.
 - One image and one client serve tutti, Mappa and any later project. A change to the record changes the model
   crate, `openapi.json` and the client's types together; a client test compares its types with `openapi.json`.
 - tutti and Mappa adopt annotate in their own pull requests. tutti's own mode and service stay until then.
-- The image takes the binary that `make build` writes in the dev container's toolchain, as tutti's does; it is
-  not built in stages of its own (tutti ADR-0020's deviation from docker-images).
+- The image takes the binary that `make server` writes in the dev container (`.devcontainer/`, Debian trixie, the
+  glibc of the image's base), as tutti's does; it is not built in stages of its own (tutti ADR-0020's deviation from
+  docker-images).
+- The client is no published npm package: a project copies `client/dist/` from a build of a tagged release.
+- No GitHub Actions for now (deviation from EMIT ADR-0006): `make ci` runs in the dev container before a pull
+  request, as in Mappa, and its result goes into the pull request.
 - sqlx checks the queries at run time; every query runs in the service's tests (tutti ADR-0020's deviation from
   EMIT ADR-0017).
 - The mode is in every build of a host that loads the script, hidden until switched on. Without a service it keeps

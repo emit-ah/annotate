@@ -15,8 +15,8 @@ It was extracted from tutti; [ADR-0001](docs/adr/0001-annotate-as-a-standalone-p
   an ES module serves bundlers.
 - `crates/annotations`: the record and its limits.
 - `crates/annotations-server`: the service, Axum and SQLite, under `/api/v1/annotations`.
-- `mk/annotations.mk`: the CLI for Claude, a Makefile include.
-- `image/`: the service's container image.
+- `cli/annotations.mk`: the CLI for Claude, a Makefile include a project copies.
+- `image/`: the service's container image; `.devcontainer/` builds its binary.
 
 [docs/integrating.md](docs/integrating.md) shows how a project wires it in.
 
