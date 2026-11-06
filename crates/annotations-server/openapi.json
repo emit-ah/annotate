@@ -152,6 +152,16 @@
                 }
               }
             }
+          },
+          "507": {
+            "description": "The database holds as much as it may.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
@@ -315,11 +325,11 @@
         }
       }
     },
-    "/api/v1/annotations/{id}/{picture}": {
+    "/api/v1/annotations/{id}/{part}": {
       "get": {
         "tags": [],
-        "summary": "One of an annotation's pictures: `crop.png`, around its target, or `frame.png`, the whole window.",
-        "operationId": "picture",
+        "summary": "One of an annotation's parts: `crop.png`, around its target, `frame.png`, the whole window, `context.json`, what\nthe app attached, or `console.json`, the console's entries.",
+        "operationId": "part",
         "parameters": [
           {
             "name": "id",
@@ -331,9 +341,9 @@
             }
           },
           {
-            "name": "picture",
+            "name": "part",
             "in": "path",
-            "description": "`crop.png` or `frame.png`.",
+            "description": "`crop.png`, `frame.png`, `context.json` or `console.json`.",
             "required": true,
             "schema": {
               "type": "string"
@@ -342,7 +352,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The picture.",
+            "description": "The picture in PNG, or the context or console in JSON.",
             "content": {
               "image/png": {
                 "schema": {
@@ -353,11 +363,14 @@
                     "minimum": 0
                   }
                 }
+              },
+              "application/json": {
+                "schema": {}
               }
             }
           },
           "404": {
-            "description": "There is no such annotation or picture.",
+            "description": "There is no such annotation or part.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -421,7 +434,9 @@
               "author",
               "status",
               "has_crop",
-              "has_frame"
+              "has_frame",
+              "has_context",
+              "has_console"
             ],
             "properties": {
               "answer": {
@@ -438,6 +453,14 @@
               "created": {
                 "type": "string",
                 "description": "When it came, in UTC, RFC 3339."
+              },
+              "has_console": {
+                "type": "boolean",
+                "description": "Whether it has the console's entries."
+              },
+              "has_context": {
+                "type": "boolean",
+                "description": "Whether the app attached a context."
               },
               "has_crop": {
                 "type": "boolean",
@@ -469,7 +492,7 @@
             }
           }
         ],
-        "description": "An annotation as the service keeps it; its pictures it gives on their own."
+        "description": "An annotation as the service keeps it; its pictures, context and console it gives on their own."
       },
       "AnnotationBody": {
         "type": "object",
@@ -549,6 +572,70 @@
             "description": "The point, as a rectangle without size, or the rectangle, in the canvas's CSS pixels."
           }
         }
+      },
+      "ConsoleEntry": {
+        "type": "object",
+        "description": "What the console said, or a request that failed, before an annotation was saved.",
+        "required": [
+          "kind",
+          "time",
+          "message"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ConsoleKind",
+            "description": "What kind of entry."
+          },
+          "message": {
+            "type": "string",
+            "description": "What it said."
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A failed request's method."
+          },
+          "stack": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its stack trace, where it has one."
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A failed request's HTTP status; 0 where no answer came.",
+            "minimum": 0
+          },
+          "time": {
+            "type": "string",
+            "description": "When, in UTC, RFC 3339."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A failed request's address, without its query."
+          }
+        }
+      },
+      "ConsoleKind": {
+        "type": "string",
+        "description": "The kind of a console's entry.",
+        "enum": [
+          "error",
+          "warn",
+          "uncaught",
+          "rejection",
+          "network"
+        ]
       },
       "Element": {
         "type": "object",
@@ -661,6 +748,16 @@
           {
             "type": "object",
             "properties": {
+              "console": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ConsoleEntry"
+                },
+                "description": "The console's latest errors and warnings, uncaught errors and failed requests, the oldest first."
+              },
+              "context": {
+                "description": "What the app attached as the annotation was saved, such as a trace of its last steps: any JSON of at most\n[`MAX_CONTEXT_BYTES`]. The app decides what it holds and redacts it; the service keeps it as data."
+              },
               "crop": {
                 "oneOf": [
                   {

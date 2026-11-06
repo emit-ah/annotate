@@ -22,6 +22,14 @@ pub const MAX_PNG_BYTES: usize = 2_000_000;
 pub const MAX_APP: usize = 64;
 /// The most characters a build's version has.
 pub const MAX_VERSION: usize = 64;
+/// The most bytes the JSON of an app's context has.
+pub const MAX_CONTEXT_BYTES: usize = 262_144;
+/// The most entries of the console an annotation keeps.
+pub const MAX_CONSOLE: usize = 50;
+/// The most characters of a stack trace.
+pub const MAX_STACK: usize = 4_000;
+/// The most characters of a request's method or of a time.
+const MAX_WORD: usize = 64;
 
 /// What the user wrote, about what, and where: the part of an annotation the client sends and the service gives back.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -63,9 +71,57 @@ pub struct NewAnnotation {
     /// The whole window at half its size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<Png>,
+    /// What the app attached as the annotation was saved, such as a trace of its last steps: any JSON of at most
+    /// [`MAX_CONTEXT_BYTES`]. The app decides what it holds and redacts it; the service keeps it as data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<serde_json::Value>,
+    /// The console's latest errors and warnings, uncaught errors and failed requests, the oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub console: Vec<ConsoleEntry>,
 }
 
-/// An annotation as the service keeps it; its pictures it gives on their own.
+/// What the console said, or a request that failed, before an annotation was saved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ConsoleEntry {
+    /// What kind of entry.
+    pub kind: ConsoleKind,
+    /// When, in UTC, RFC 3339.
+    pub time: String,
+    /// What it said.
+    pub message: String,
+    /// Its stack trace, where it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack: Option<String>,
+    /// A failed request's method.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// A failed request's address, without its query.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// A failed request's HTTP status; 0 where no answer came.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+}
+
+/// The kind of a console's entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ConsoleKind {
+    /// `console.error`.
+    Error,
+    /// `console.warn`.
+    Warn,
+    /// An error nothing caught.
+    Uncaught,
+    /// A promise rejected that nothing handled.
+    Rejection,
+    /// A request that failed.
+    Network,
+}
+
+/// An annotation as the service keeps it; its pictures, context and console it gives on their own.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Annotation {
@@ -89,6 +145,10 @@ pub struct Annotation {
     pub has_crop: bool,
     /// Whether it has the whole window.
     pub has_frame: bool,
+    /// Whether the app attached a context.
+    pub has_context: bool,
+    /// Whether it has the console's entries.
+    pub has_console: bool,
     /// What the user wrote, about what, and where.
     #[serde(flatten)]
     pub body: AnnotationBody,
@@ -372,8 +432,9 @@ impl fmt::Display for Invalid {
 impl std::error::Error for Invalid {}
 
 impl NewAnnotation {
-    /// Whether it keeps the limits: its body's (see [`AnnotationBody::check`]) and pictures of at most
-    /// [`MAX_PNG_BYTES`].
+    /// Whether it keeps the limits: its body's (see [`AnnotationBody::check`]), pictures of at most
+    /// [`MAX_PNG_BYTES`], a context of at most [`MAX_CONTEXT_BYTES`] as JSON, and at most [`MAX_CONSOLE`] entries of
+    /// the console, each with texts of at most [`MAX_TEXT`] characters and a stack of at most [`MAX_STACK`].
     ///
     /// # Errors
     ///
@@ -388,7 +449,49 @@ impl NewAnnotation {
                 ));
             }
         }
-        Ok(())
+        if let Some(context) = &self.context
+            && context_bytes(context) > MAX_CONTEXT_BYTES
+        {
+            return Err(Invalid::new(
+                "context",
+                format!("has more than {MAX_CONTEXT_BYTES} bytes as JSON"),
+            ));
+        }
+        if self.console.len() > MAX_CONSOLE {
+            return Err(Invalid::new(
+                "console",
+                format!("has more than {MAX_CONSOLE} entries"),
+            ));
+        }
+        self.console.iter().try_for_each(ConsoleEntry::check)
+    }
+}
+
+/// The bytes of `context` as compact JSON.
+#[must_use]
+pub fn context_bytes(context: &serde_json::Value) -> usize {
+    context.to_string().len()
+}
+
+impl ConsoleEntry {
+    fn check(&self) -> Result<(), Invalid> {
+        length("console.time", &self.time, MAX_WORD)?;
+        length("console.message", &self.message, MAX_TEXT)?;
+        length(
+            "console.stack",
+            self.stack.as_deref().unwrap_or_default(),
+            MAX_STACK,
+        )?;
+        length(
+            "console.method",
+            self.method.as_deref().unwrap_or_default(),
+            MAX_WORD,
+        )?;
+        length(
+            "console.url",
+            self.url.as_deref().unwrap_or_default(),
+            MAX_TEXT,
+        )
     }
 }
 

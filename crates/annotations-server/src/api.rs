@@ -6,7 +6,10 @@
 
 use std::sync::Arc;
 
-use annotations::{Annotation, MAX_PNG_BYTES, NewAnnotation, Status, StatusUpdate, is_app_name};
+use annotations::{
+    Annotation, MAX_CONSOLE, MAX_CONTEXT_BYTES, MAX_PNG_BYTES, MAX_STACK, MAX_TEXT, NewAnnotation,
+    Status, StatusUpdate, is_app_name,
+};
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::{DefaultBodyLimit, FromRequest, FromRequestParts, Path, Query, Request, State};
 use axum::http::header::{
@@ -22,10 +25,15 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use utoipa::OpenApi;
 
-use crate::store::{Filter, Picture, Store, StoreError};
+use crate::store::{Attachment, Filter, Picture, Store, StoreError};
 
-/// The most bytes a request has: two pictures of [`MAX_PNG_BYTES`] each in Base64, and 1 MB for the rest.
-const BODY_LIMIT: usize = 2 * MAX_PNG_BYTES.div_ceil(3) * 4 + 1_000_000;
+/// The most bytes the console's entries have in JSON: each a message, an address and a stack, of characters of up to
+/// 4 bytes, escaped at worst to 6.
+const CONSOLE_BYTES: usize = MAX_CONSOLE * (2 * MAX_TEXT + MAX_STACK) * 6;
+/// The most bytes a request has: two pictures of [`MAX_PNG_BYTES`] each in Base64, the context, the console, and 1 MB
+/// for the rest.
+const BODY_LIMIT: usize =
+    2 * MAX_PNG_BYTES.div_ceil(3) * 4 + MAX_CONTEXT_BYTES + CONSOLE_BYTES + 1_000_000;
 /// The most pixels a picture has on either side.
 const MAX_PICTURE_SIDE: u32 = 16_384;
 /// The most bytes the check of a picture's header holds in memory, far below the service's limit.
@@ -118,7 +126,7 @@ pub fn router(store: Store, access: Access) -> Router {
             "/api/v1/annotations/{id}",
             get(one).patch(update).delete(remove),
         )
-        .route("/api/v1/annotations/{id}/{picture}", get(picture))
+        .route("/api/v1/annotations/{id}/{part}", get(part))
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "there is no such resource") })
         .method_not_allowed_fallback(|| async {
             ApiError::new(
@@ -177,7 +185,7 @@ async fn guard_headers(request: Request, next: Next) -> Response {
         description = "The annotations of an app's testers and Claude's answers (ADR-0001).",
         license(name = "Proprietary, all rights reserved")
     ),
-    paths(list, create, one, update, remove, picture, live, ready),
+    paths(list, create, one, update, remove, part, live, ready),
     components(schemas(Problem))
 )]
 pub struct ApiDoc;
@@ -222,6 +230,13 @@ impl ApiError {
 
 impl From<StoreError> for ApiError {
     fn from(error: StoreError) -> Self {
+        if matches!(error, StoreError::Full) {
+            tracing::warn!("the database is full");
+            return Self::new(
+                StatusCode::INSUFFICIENT_STORAGE,
+                "the annotation service is full; annotations done go after 90 days",
+            );
+        }
         tracing::error!(%error, "the store failed");
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -392,6 +407,7 @@ async fn list(
     (status = 403, description = "Another site's page asks for it.", body = Problem, content_type = "application/problem+json"),
     (status = 413, description = "It is larger than the service takes.", body = Problem, content_type = "application/problem+json"),
     (status = 422, description = "It does not read, breaks a limit, names an app the service does not keep, or a picture is no PNG.", body = Problem, content_type = "application/problem+json"),
+    (status = 507, description = "The database holds as much as it may.", body = Problem, content_type = "application/problem+json"),
 ))]
 async fn create(
     State(app): State<App>,
@@ -521,33 +537,40 @@ async fn remove(
     }
 }
 
-/// One of an annotation's pictures: `crop.png`, around its target, or `frame.png`, the whole window.
-#[utoipa::path(get, path = "/api/v1/annotations/{id}/{picture}", params(
+/// One of an annotation's parts: `crop.png`, around its target, `frame.png`, the whole window, `context.json`, what
+/// the app attached, or `console.json`, the console's entries.
+#[utoipa::path(get, path = "/api/v1/annotations/{id}/{part}", params(
     ("id" = String, Path, description = "Its ID."),
-    ("picture" = String, Path, description = "`crop.png` or `frame.png`."),
+    ("part" = String, Path, description = "`crop.png`, `frame.png`, `context.json` or `console.json`."),
 ), responses(
-    (status = 200, description = "The picture.", content_type = "image/png", body = Vec<u8>),
-    (status = 404, description = "There is no such annotation or picture.", body = Problem, content_type = "application/problem+json"),
+    (status = 200, description = "The picture in PNG, or the context or console in JSON.", content((Vec<u8> = "image/png"), (serde_json::Value = "application/json"))),
+    (status = 404, description = "There is no such annotation or part.", body = Problem, content_type = "application/problem+json"),
 ))]
-async fn picture(
+async fn part(
     State(app): State<App>,
     _caller: Caller,
-    Params((id, picture)): Params<(String, String)>,
+    Params((id, part)): Params<(String, String)>,
 ) -> Result<Response, ApiError> {
-    let which = match picture.as_str() {
-        "crop.png" => Picture::Crop,
-        "frame.png" => Picture::Frame,
-        _ => {
-            return Err(ApiError::new(
-                StatusCode::NOT_FOUND,
-                "there is no such picture",
-            ));
-        }
+    let missing = || ApiError::new(StatusCode::NOT_FOUND, "there is no such part");
+    let (bytes, kind) = match part.as_str() {
+        "crop.png" => (app.store.picture(&id, Picture::Crop).await?, "image/png"),
+        "frame.png" => (app.store.picture(&id, Picture::Frame).await?, "image/png"),
+        "context.json" => (
+            app.store
+                .attachment(&id, Attachment::Context)
+                .await?
+                .map(String::into_bytes),
+            "application/json",
+        ),
+        "console.json" => (
+            app.store
+                .attachment(&id, Attachment::Console)
+                .await?
+                .map(String::into_bytes),
+            "application/json",
+        ),
+        _ => return Err(missing()),
     };
-    let bytes = app
-        .store
-        .picture(&id, which)
-        .await?
-        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "there is no such picture"))?;
-    Ok(([(CONTENT_TYPE, "image/png")], bytes).into_response())
+    let bytes = bytes.ok_or_else(missing)?;
+    Ok(([(CONTENT_TYPE, kind)], bytes).into_response())
 }

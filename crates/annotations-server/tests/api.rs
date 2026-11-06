@@ -705,3 +705,132 @@ fn the_service_runs_open_only_where_its_settings_say_local_and_names_its_admins(
         .is_err()
     );
 }
+
+/// The body of `uri`'s answer as `user`, with its status and content type, as bytes.
+async fn fetch_part(app: &Router, uri: &str) -> (StatusCode, String, Vec<u8>) {
+    let request = Request::get(uri)
+        .header(USER, "andreas")
+        .body(Body::empty())
+        .expect("a request");
+    let response = app.clone().oneshot(request).await.expect("an answer");
+    let status = response.status();
+    let kind = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("a body")
+        .to_bytes();
+    (status, kind, bytes.to_vec())
+}
+
+#[tokio::test]
+async fn the_app_s_context_and_the_console_are_kept_and_served_as_json_on_their_own() {
+    let app = behind_proxy().await;
+    let mut body = repeat_button();
+    body["context"] = json!({"turns": [{"tool": "propose_changes", "ms": 412}]});
+    body["console"] = json!([
+        {"kind": "error", "time": "2026-11-06T10:00:00.000Z", "message": "TypeError: x", "stack": "at a (b.js:1:2)"},
+        {"kind": "network", "time": "2026-11-06T10:00:01.000Z", "message": "GET /x 500", "method": "GET", "url": "/x", "status": 500}
+    ]);
+    let (status, kept, _) = call(
+        &app,
+        Method::POST,
+        "/api/v1/annotations",
+        Some("andreas"),
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(kept["has_context"], json!(true));
+    assert_eq!(kept["has_console"], json!(true));
+    assert!(kept.get("context").is_none(), "a list stays small");
+    let id = kept["id"].as_str().expect("an id");
+    let (status, kind, bytes) =
+        fetch_part(&app, &format!("/api/v1/annotations/{id}/context.json")).await;
+    assert_eq!(
+        (status, kind.as_str()),
+        (StatusCode::OK, "application/json")
+    );
+    let context: Value = serde_json::from_slice(&bytes).expect("JSON");
+    assert_eq!(context["turns"][0]["ms"], json!(412));
+    let (_, _, bytes) = fetch_part(&app, &format!("/api/v1/annotations/{id}/console.json")).await;
+    let console: Value = serde_json::from_slice(&bytes).expect("JSON");
+    assert_eq!(console[1]["status"], json!(500));
+
+    let (_, plain, _) = call(
+        &app,
+        Method::POST,
+        "/api/v1/annotations",
+        Some("andreas"),
+        Some(repeat_button()),
+    )
+    .await;
+    assert_eq!(plain["has_context"], json!(false));
+    let id = plain["id"].as_str().expect("an id");
+    for part in ["context.json", "console.json", "other.txt"] {
+        let (status, kind, _) = fetch_part(&app, &format!("/api/v1/annotations/{id}/{part}")).await;
+        assert_eq!(
+            (status, kind.as_str()),
+            (StatusCode::NOT_FOUND, "application/problem+json"),
+            "{part}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_context_larger_than_its_limit_is_refused() {
+    let app = behind_proxy().await;
+    let mut body = repeat_button();
+    body["context"] = json!({ "trace": "x".repeat(annotations::MAX_CONTEXT_BYTES) });
+    let (status, problem, _) = call(
+        &app,
+        Method::POST,
+        "/api/v1/annotations",
+        Some("andreas"),
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        problem["detail"],
+        json!("context has more than 262144 bytes as JSON")
+    );
+}
+
+#[tokio::test]
+async fn a_full_database_says_so_and_keeps_what_it_has() {
+    // A few pages hold the schema and one small annotation, but no context of 100 KB.
+    let app = router(
+        Store::in_memory_of(12).await.expect("a small store"),
+        Access::default(),
+    );
+    let (status, _, _) = call(
+        &app,
+        Method::POST,
+        "/api/v1/annotations",
+        None,
+        Some(repeat_button()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let mut big = repeat_button();
+    big["context"] = json!({ "trace": "x".repeat(100_000) });
+    let (status, problem, kind) =
+        call(&app, Method::POST, "/api/v1/annotations", None, Some(big)).await;
+    assert_eq!(
+        (status, kind.as_str()),
+        (StatusCode::INSUFFICIENT_STORAGE, "application/problem+json")
+    );
+    assert_eq!(
+        problem["detail"],
+        json!("the annotation service is full; annotations done go after 90 days")
+    );
+    let (_, list, _) = call(&app, Method::GET, "/api/v1/annotations", None, None).await;
+    assert_eq!(list.as_array().map(Vec::len), Some(1));
+}

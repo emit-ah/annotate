@@ -40,6 +40,21 @@ fn repeat_button() -> NewAnnotation {
         },
         crop: Some(Png(vec![0x89, b'P', b'N', b'G'])),
         frame: None,
+        context: None,
+        console: Vec::new(),
+    }
+}
+
+/// An entry of the console, an error with its stack.
+fn console_error() -> ConsoleEntry {
+    ConsoleEntry {
+        kind: ConsoleKind::Error,
+        time: "2026-11-06T10:00:00.000Z".to_owned(),
+        message: "TypeError: x is undefined".to_owned(),
+        stack: Some("at render (app.js:1:2)".to_owned()),
+        method: None,
+        url: None,
+        status: None,
     }
 }
 
@@ -218,4 +233,43 @@ fn a_status_update_keeps_the_answer_s_limit_and_names_a_commit_or_clears_it() {
         Err("answer".to_owned())
     );
     assert_eq!(StatusUpdate::reopen().status, Some(Status::Open));
+}
+
+#[test]
+fn an_annotation_carries_the_app_s_context_and_the_console_as_json() -> Result<(), serde_json::Error>
+{
+    let mut annotation = repeat_button();
+    annotation.context = Some(json!({"turns": [{"tool": "propose_changes", "ms": 412}]}));
+    annotation.console = vec![console_error()];
+    let sent = serde_json::to_value(&annotation)?;
+    assert_eq!(
+        sent["context"]["turns"][0]["tool"],
+        json!("propose_changes")
+    );
+    assert_eq!(sent["console"][0]["kind"], json!("error"));
+    assert!(sent["console"][0].get("status").is_none());
+    assert_eq!(serde_json::from_value::<NewAnnotation>(sent)?, annotation);
+    assert!(
+        serde_json::to_value(repeat_button())?
+            .get("console")
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn a_context_and_the_console_keep_their_limits() {
+    let mut annotation = repeat_button();
+    let filler = "x".repeat(MAX_CONTEXT_BYTES);
+    annotation.context = Some(json!({ "trace": filler }));
+    assert_eq!(broken(&annotation), Err("context".to_owned()));
+    annotation.context = Some(json!("x".repeat(MAX_CONTEXT_BYTES - 2)));
+    assert_eq!(broken(&annotation), Ok(()));
+    annotation.context = None;
+    annotation.console = vec![console_error(); MAX_CONSOLE + 1];
+    assert_eq!(broken(&annotation), Err("console".to_owned()));
+    let mut long = console_error();
+    long.stack = Some("x".repeat(MAX_STACK + 1));
+    annotation.console = vec![long];
+    assert_eq!(broken(&annotation), Err("console.stack".to_owned()));
 }

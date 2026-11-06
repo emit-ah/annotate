@@ -19,14 +19,18 @@ macro_rules! now {
 
 /// The days an annotation that is done, or won't be, stays.
 pub const KEEP_RESOLVED_DAYS: u32 = 90;
-/// The most pages of 4 KiB the database has: 1 GiB.
-const MAX_PAGES: &str = "262144";
+/// The most pages of 4 KiB the database has: 1 GiB, pictures, contexts and consoles included.
+pub const MAX_PAGES: u32 = 262_144;
+
+/// SQLite's code for a database that is full.
+const SQLITE_FULL: &str = "13";
 
 /// The columns of a [`Row`].
 macro_rules! columns {
     () => {
         "id, created, updated, author, status, answer, resolved_in, body, \
-         crop IS NOT NULL AS has_crop, frame IS NOT NULL AS has_frame"
+         crop IS NOT NULL AS has_crop, frame IS NOT NULL AS has_frame, \
+         context IS NOT NULL AS has_context, console IS NOT NULL AS has_console"
     };
 }
 
@@ -50,6 +54,24 @@ pub enum StoreError {
     /// A status in the database is none the service knows.
     #[error("annotation {0} has an unknown status")]
     Status(String),
+    /// The database holds as much as it may.
+    #[error("the database is full")]
+    Full,
+}
+
+impl StoreError {
+    /// `error`, as a full database where SQLite says so.
+    fn of_write(error: sqlx::Error) -> Self {
+        let full = error
+            .as_database_error()
+            .and_then(|database| database.code())
+            .is_some_and(|code| code == SQLITE_FULL);
+        if full {
+            Self::Full
+        } else {
+            Self::Database(error)
+        }
+    }
 }
 
 /// Which annotations a list holds; what it leaves out does not filter.
@@ -74,6 +96,15 @@ pub enum Picture {
     Frame,
 }
 
+/// What an annotation carries as JSON beside its body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Attachment {
+    /// The app's context.
+    Context,
+    /// The console's entries.
+    Console,
+}
+
 /// The annotations of one SQLite database.
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -92,6 +123,8 @@ struct Row {
     body: String,
     has_crop: bool,
     has_frame: bool,
+    has_context: bool,
+    has_console: bool,
 }
 
 impl Row {
@@ -113,6 +146,8 @@ impl Row {
             resolved_in: self.resolved_in,
             has_crop: self.has_crop,
             has_frame: self.has_frame,
+            has_context: self.has_context,
+            has_console: self.has_console,
             body,
         })
     }
@@ -129,7 +164,7 @@ impl Store {
             .filename(path)
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
-            .pragma("max_page_count", MAX_PAGES);
+            .pragma("max_page_count", MAX_PAGES.to_string());
         Self::with(
             SqlitePoolOptions::new()
                 .max_connections(4)
@@ -145,7 +180,17 @@ impl Store {
     ///
     /// Where SQLite cannot start.
     pub async fn in_memory() -> Result<Self, StoreError> {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:")?;
+        Self::in_memory_of(MAX_PAGES).await
+    }
+
+    /// A store in memory of at most `max_pages` pages, for tests of a full database.
+    ///
+    /// # Errors
+    ///
+    /// Where SQLite cannot start.
+    pub async fn in_memory_of(max_pages: u32) -> Result<Self, StoreError> {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")?
+            .pragma("max_page_count", max_pages.to_string());
         // One connection, as each connection to memory is a database of its own.
         Self::with(
             SqlitePoolOptions::new()
@@ -205,17 +250,24 @@ impl Store {
         annotation: NewAnnotation,
     ) -> Result<Annotation, StoreError> {
         let id = uuid::Uuid::now_v7().to_string();
-        let body = serde_json::to_string(&annotation.body).map_err(|source| StoreError::Body {
+        let json = |source| StoreError::Body {
             id: id.clone(),
             source,
-        })?;
+        };
+        let body = serde_json::to_string(&annotation.body).map_err(json)?;
+        let context = annotation.context.as_ref().map(ToString::to_string);
+        let console = (!annotation.console.is_empty())
+            .then(|| serde_json::to_string(&annotation.console))
+            .transpose()
+            .map_err(json)?;
         sqlx::query(concat!(
-            "INSERT INTO annotations (id, created, updated, author, status, app, path, version, body, crop, frame) \
+            "INSERT INTO annotations \
+             (id, created, updated, author, status, app, path, version, body, crop, frame, context, console) \
              VALUES (?1, ",
             now!(),
             ", ",
             now!(),
-            ", ?2, 'open', ?3, ?4, ?5, ?6, ?7, ?8)"
+            ", ?2, 'open', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
         ))
         .bind(&id)
         .bind(author)
@@ -225,8 +277,11 @@ impl Store {
         .bind(body)
         .bind(annotation.crop.map(|png| png.0))
         .bind(annotation.frame.map(|png| png.0))
+        .bind(context)
+        .bind(console)
         .execute(&self.pool)
-        .await?;
+        .await
+        .map_err(StoreError::of_write)?;
         self.get(&id)
             .await?
             .ok_or(StoreError::Database(sqlx::Error::RowNotFound))
@@ -290,6 +345,27 @@ impl Store {
             .fetch_optional(&self.pool)
             .await?;
         Ok(picture.flatten())
+    }
+
+    /// What the annotation `id` carries as `which`, as JSON; none where it carries none or there is no such annotation.
+    ///
+    /// # Errors
+    ///
+    /// Where the database fails.
+    pub async fn attachment(
+        &self,
+        id: &str,
+        which: Attachment,
+    ) -> Result<Option<String>, StoreError> {
+        let query = match which {
+            Attachment::Context => "SELECT context FROM annotations WHERE id = ?1",
+            Attachment::Console => "SELECT console FROM annotations WHERE id = ?1",
+        };
+        let json: Option<Option<String>> = sqlx::query_scalar(query)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(json.flatten())
     }
 
     /// Applies `update` to the annotation `id` and gives it back; none where there is no such. What it leaves out
