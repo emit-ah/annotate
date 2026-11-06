@@ -1,0 +1,34 @@
+[package]
+name = "annotations-server"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license-file.workspace = true
+description = "The annotation service: keeps the annotations of any app in SQLite and serves them over HTTP (ADR-0001)"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "annotations-server"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+png.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["fmt"] }
+annotations = { workspace = true, features = ["openapi"] }
+utoipa.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+http-body-util.workspace = true
+tower.workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "annotations"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license-file.workspace = true
+description = "What an annotation holds: the app, the comment, its target, the view's state and the version (ADR-0001)"
+
+[lints]
+workspace = true
+
+[features]
+# The OpenAPI schema of each type, which the annotation service publishes.
+openapi = ["dep:utoipa"]
+
+[dependencies]
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+utoipa = { workspace = true, optional = true }

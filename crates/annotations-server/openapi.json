@@ -1,0 +1,1091 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "annotate",
+    "description": "The annotations of an app's testers and Claude's answers (ADR-0001).",
+    "license": {
+      "name": "Proprietary, all rights reserved"
+    },
+    "version": "1"
+  },
+  "paths": {
+    "/api/v1/annotations": {
+      "get": {
+        "tags": [],
+        "summary": "The annotations, the newest first.",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only those of this status.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Status"
+            }
+          },
+          {
+            "name": "app",
+            "in": "query",
+            "description": "Only those of this app.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "description": "Only those of this page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "Only those of this version.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most it holds: 100 where it names none, 500 at most.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The annotations, without their pictures.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Annotation"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The query does not read, or its limit is out of range.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No user is named.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "The service runs open and the request is for another host than localhost.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [],
+        "summary": "Keeps a new annotation, open, by the caller.",
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewAnnotation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "It is kept.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Annotation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No user is named.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Another site's page asks for it.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "It is larger than the service takes.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It does not read, breaks a limit, names an app the service does not keep, or a picture is no PNG.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "The database holds as much as it may.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotations/{id}": {
+      "get": {
+        "tags": [],
+        "summary": "One annotation.",
+        "operationId": "one",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Its ID.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The annotation, without its pictures.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Annotation"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [],
+        "summary": "Removes an annotation, which only its author does, while it is open.",
+        "operationId": "remove",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Its ID.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "It is removed."
+          },
+          "403": {
+            "description": "The caller may not, or another site's page asks for it.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [],
+        "summary": "Changes an annotation: an admin its status, answer or resolving commit, and its author only reopens it, where it\nis done or won't be. Reopening clears its resolving commit.",
+        "operationId": "update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Its ID.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "It is changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Annotation"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller may not, or another site's page asks for it.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Its author reopens only what is done or won't be.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The change does not read or breaks a limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "The database holds as much as it may.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotations/{id}/{part}": {
+      "get": {
+        "tags": [],
+        "summary": "One of an annotation's parts: `crop.png`, around its target, `frame.png`, the whole window, `context.json`, what\nthe app attached, or `console.json`, the console's entries.",
+        "operationId": "part",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Its ID.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "part",
+            "in": "path",
+            "description": "`crop.png`, `frame.png`, `context.json` or `console.json`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The picture in PNG, or the context or console in JSON.",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such annotation or part.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "tags": [],
+        "summary": "The service runs.",
+        "operationId": "live",
+        "responses": {
+          "200": {
+            "description": "It runs."
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [],
+        "summary": "The service and its database answer.",
+        "operationId": "ready",
+        "responses": {
+          "200": {
+            "description": "It answers."
+          },
+          "503": {
+            "description": "Its database does not.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Annotation": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AnnotationBody",
+            "description": "What the user wrote, about what, and where."
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "created",
+              "updated",
+              "author",
+              "status",
+              "has_crop",
+              "has_frame",
+              "has_context",
+              "has_console"
+            ],
+            "properties": {
+              "answer": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Claude's answer, where there is one.",
+                "maxLength": 4000
+              },
+              "author": {
+                "type": "string",
+                "description": "Who wrote it, as the service knows them."
+              },
+              "created": {
+                "type": "string",
+                "description": "When it came, in UTC, RFC 3339."
+              },
+              "has_console": {
+                "type": "boolean",
+                "description": "Whether it has the console's entries."
+              },
+              "has_context": {
+                "type": "boolean",
+                "description": "Whether the app attached a context."
+              },
+              "has_crop": {
+                "type": "boolean",
+                "description": "Whether it has the crop around its target."
+              },
+              "has_frame": {
+                "type": "boolean",
+                "description": "Whether it has the whole window."
+              },
+              "id": {
+                "type": "string",
+                "description": "Its ID, a UUID of version 7, which sorts by time."
+              },
+              "resolved_in": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The commit that resolved it, where one did."
+              },
+              "status": {
+                "$ref": "#/components/schemas/Status",
+                "description": "Where it stands."
+              },
+              "updated": {
+                "type": "string",
+                "description": "When it last changed, in UTC, RFC 3339."
+              }
+            }
+          }
+        ],
+        "description": "An annotation as the service keeps it; its pictures, context and console it gives on their own."
+      },
+      "AnnotationBody": {
+        "type": "object",
+        "description": "What the user wrote, about what, and where: the part of an annotation the client sends and the service gives back.",
+        "required": [
+          "app",
+          "comment",
+          "path",
+          "version",
+          "viewport",
+          "target"
+        ],
+        "properties": {
+          "app": {
+            "type": "string",
+            "description": "The app or project annotated, a slug such as `mappa` or `tutti`.",
+            "maxLength": 64,
+            "pattern": "^[a-z0-9_-]+$"
+          },
+          "browser": {
+            "type": "string",
+            "description": "The browser and its version, in brief.",
+            "maxLength": 2000
+          },
+          "comment": {
+            "type": "string",
+            "description": "What the user says.",
+            "maxLength": 4000
+          },
+          "path": {
+            "type": "string",
+            "description": "The page: the path of its address, such as `/practice/ode-to-joy`.",
+            "maxLength": 2000
+          },
+          "query": {
+            "type": "string",
+            "description": "The query of its address, without the `?` and without the parameter that switched the mode on; empty for none.",
+            "maxLength": 2000
+          },
+          "state": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Entry"
+            },
+            "description": "What describes the view, such as the document, the zoom and the options, each by its name.",
+            "maxItems": 100
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target",
+            "description": "What the comment is about."
+          },
+          "version": {
+            "type": "string",
+            "description": "The build annotated: a commit, with `+dirty` where its tree had changes, or a version such as `1.4.0`.",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9._+-]+$"
+          },
+          "viewport": {
+            "$ref": "#/components/schemas/Viewport",
+            "description": "The browser's window."
+          }
+        }
+      },
+      "CanvasItems": {
+        "type": "object",
+        "description": "What a canvas draws at a point or in a rectangle, in the app's own words.",
+        "required": [
+          "canvas",
+          "rect",
+          "hits"
+        ],
+        "properties": {
+          "canvas": {
+            "type": "string",
+            "description": "Which canvas, such as `notation` or `map`.",
+            "maxLength": 2000
+          },
+          "hits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Hit"
+            },
+            "description": "What lies there, the nearest first.",
+            "maxItems": 100
+          },
+          "rect": {
+            "$ref": "#/components/schemas/Rect",
+            "description": "The point, as a rectangle without size, or the rectangle, in the canvas's CSS pixels."
+          }
+        }
+      },
+      "ConsoleEntry": {
+        "type": "object",
+        "description": "What the console said, or a request that failed, before an annotation was saved.",
+        "required": [
+          "kind",
+          "time",
+          "message"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ConsoleKind",
+            "description": "What kind of entry."
+          },
+          "message": {
+            "type": "string",
+            "description": "What it said.",
+            "maxLength": 2000
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A failed request's method.",
+            "maxLength": 64
+          },
+          "stack": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its stack trace, where it has one.",
+            "maxLength": 4000
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A failed request's HTTP status; 0 where no answer came.",
+            "minimum": 0
+          },
+          "time": {
+            "type": "string",
+            "description": "When, in UTC, RFC 3339.",
+            "maxLength": 64
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A failed request's address, without its query.",
+            "maxLength": 2000
+          }
+        }
+      },
+      "ConsoleKind": {
+        "type": "string",
+        "description": "The kind of a console's entry.",
+        "enum": [
+          "error",
+          "warn",
+          "uncaught",
+          "rejection",
+          "network"
+        ]
+      },
+      "Element": {
+        "type": "object",
+        "description": "An element of the page, named as tests find elements: by role and accessible name, and by the app's IDs of its\ntexts, which lead to the code.",
+        "required": [
+          "tag",
+          "dom_path",
+          "rect"
+        ],
+        "properties": {
+          "components": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The components it lies in, the outermost first, as their roots name them.",
+            "maxItems": 100
+          },
+          "dom_path": {
+            "type": "string",
+            "description": "Its path in the page, from the root, as tags with their place among their siblings.",
+            "maxLength": 2000
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its accessible name.",
+            "maxLength": 2000
+          },
+          "rect": {
+            "$ref": "#/components/schemas/Rect",
+            "description": "Where it lies in the window."
+          },
+          "redacted": {
+            "type": "boolean",
+            "description": "Whether the app kept its name and text out of the record."
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its role, given or implied by its tag.",
+            "maxLength": 2000
+          },
+          "tag": {
+            "type": "string",
+            "description": "Its tag, such as `button`.",
+            "maxLength": 2000
+          },
+          "text": {
+            "type": "string",
+            "description": "The start of its text.",
+            "maxLength": 2000
+          },
+          "text_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The app's IDs of the texts it shows, such as the message IDs of its translations.",
+            "maxItems": 100
+          }
+        }
+      },
+      "Entry": {
+        "type": "object",
+        "description": "A value by its name, such as `zoom` and `180 %`.",
+        "required": [
+          "name",
+          "value"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Its name.",
+            "maxLength": 2000
+          },
+          "value": {
+            "type": "string",
+            "description": "Its value.",
+            "maxLength": 2000
+          }
+        }
+      },
+      "Hit": {
+        "type": "object",
+        "description": "One thing a canvas draws, such as a note or a card.",
+        "required": [
+          "kind",
+          "words"
+        ],
+        "properties": {
+          "details": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Entry"
+            },
+            "description": "Its details by name, such as `pitch` and `measure`.",
+            "maxItems": 100
+          },
+          "kind": {
+            "type": "string",
+            "description": "Its kind, such as `note` or `card`.",
+            "maxLength": 2000
+          },
+          "words": {
+            "type": "string",
+            "description": "It in words, such as \"G4, measure 2, beat 1, right hand\".",
+            "maxLength": 2000
+          }
+        }
+      },
+      "NewAnnotation": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AnnotationBody",
+            "description": "What the user wrote, about what, and where."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "console": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ConsoleEntry"
+                },
+                "description": "The console's latest errors and warnings, uncaught errors and failed requests, the oldest first.",
+                "maxItems": 50
+              },
+              "context": {
+                "description": "What the app attached as the annotation was saved, such as a trace of its last steps: any JSON of at most\n[`MAX_CONTEXT_BYTES`]. The app decides what it holds and redacts it; the service keeps it as data."
+              },
+              "crop": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Png",
+                    "description": "The pixels around the target."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "frame": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Png",
+                    "description": "The whole window at half its size."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "An annotation as the client sends it: its body and the pictures of what the user saw, where the tab was shared."
+      },
+      "Png": {
+        "type": "string",
+        "format": "byte",
+        "description": "A picture in PNG, which JSON carries in Base64."
+      },
+      "Problem": {
+        "type": "object",
+        "description": "A problem as RFC 9457 describes it.",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "What went wrong here."
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The HTTP status.",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string",
+            "description": "The status in words."
+          },
+          "type": {
+            "type": "string",
+            "description": "Always `about:blank`: the status tells the kind."
+          }
+        }
+      },
+      "Rect": {
+        "type": "object",
+        "description": "A rectangle in CSS pixels: of the window, or of a canvas for a canvas's items.",
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "properties": {
+          "height": {
+            "type": "number",
+            "format": "double",
+            "description": "Its height."
+          },
+          "width": {
+            "type": "number",
+            "format": "double",
+            "description": "Its width."
+          },
+          "x": {
+            "type": "number",
+            "format": "double",
+            "description": "Its left edge."
+          },
+          "y": {
+            "type": "number",
+            "format": "double",
+            "description": "Its top edge."
+          }
+        }
+      },
+      "Region": {
+        "type": "object",
+        "description": "A rectangle of the window, with the elements and canvas items it covers.",
+        "required": [
+          "rect"
+        ],
+        "properties": {
+          "elements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Element"
+            },
+            "description": "The elements in it, the outermost that lie wholly in it.",
+            "maxItems": 100
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CanvasItems"
+            },
+            "description": "The canvas items in it.",
+            "maxItems": 100
+          },
+          "rect": {
+            "$ref": "#/components/schemas/Rect",
+            "description": "The rectangle."
+          }
+        }
+      },
+      "Status": {
+        "type": "string",
+        "description": "Where an annotation stands.",
+        "enum": [
+          "open",
+          "in_progress",
+          "done",
+          "wont_do"
+        ]
+      },
+      "StatusUpdate": {
+        "type": "object",
+        "description": "A change of an annotation's status, answer or resolving commit: what it leaves out stays, and an empty answer or\ncommit clears it. An admin changes all; an annotation's author only reopens it, which clears its commit.",
+        "properties": {
+          "answer": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The answer; empty to clear it.",
+            "maxLength": 4000
+          },
+          "resolved_in": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The commit that resolved it; empty to clear it."
+          },
+          "status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Status",
+                "description": "The new status."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Target": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Element",
+                "description": "An element of the page."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "element"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "An element of the page."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CanvasItems",
+                "description": "What a canvas draws at a point or in a rectangle."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "canvas"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "What a canvas draws at a point or in a rectangle."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Region",
+                "description": "A rectangle of the window, with what it covers."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "region"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "A rectangle of the window, with what it covers."
+          }
+        ],
+        "description": "What an annotation is about."
+      },
+      "Viewport": {
+        "type": "object",
+        "description": "The browser's window: its size in CSS pixels and how many device pixels one has.",
+        "required": [
+          "width",
+          "height",
+          "pixel_ratio"
+        ],
+        "properties": {
+          "height": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its height.",
+            "minimum": 0
+          },
+          "pixel_ratio": {
+            "type": "number",
+            "format": "double",
+            "description": "The device pixels of one CSS pixel."
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its width.",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  }
+}

@@ -3,8 +3,9 @@
 An annotation mode for any web app, in the style of Claude Design's review mode. Testers press `Alt+Shift+A`
 (or open the app with `?annotate`), click an element, a canvas item or a dragged region, and write a comment.
 The comment goes to a small service with the version, the page, the window, the view's state, the target by role,
-accessible name and text IDs, and pictures where the tab is shared. Claude lists the open annotations, works on
-them and answers with a status and the resolving commit.
+accessible name and text IDs, pictures where the tab is shared, the console's latest errors and failed requests,
+and whatever context the app attaches. Claude lists the open annotations, works on them and answers with a status
+and the resolving commit.
 
 It was extracted from tutti; [ADR-0001](docs/adr/0001-annotate-as-a-standalone-project.md) records the decision.
 
@@ -14,12 +15,13 @@ It was extracted from tutti; [ADR-0001](docs/adr/0001-annotate-as-a-standalone-p
   an ES module serves bundlers.
 - `crates/annotations`: the record and its limits.
 - `crates/annotations-server`: the service, Axum and SQLite, under `/api/v1/annotations`.
-- `mk/annotations.mk`: the CLI for Claude, a Makefile include.
-- `image/`: the service's container image.
+- `cli/annotations.mk`: the CLI for Claude, a Makefile include a project copies.
+- `image/`: the service's container image; `.devcontainer/` builds its binary.
 
 [docs/integrating.md](docs/integrating.md) shows how a project wires it in.
 
 ## Develop
 
-`make help` lists the commands; `make setup` installs the pinned tools through mise, and `make ci` runs every
-check.
+`make help` lists the commands; `make setup` installs the pinned tools through mise (Rust, Node, pnpm, jq,
+cargo-deny) and the client's packages, `make verify` runs the checks before a commit and `make ci` every check,
+the end-to-end tests in Chromium included. `make image` builds the service's image where Docker is at hand.
