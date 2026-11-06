@@ -1,5 +1,4 @@
-// The comment's popover beside its target and the list of the page's annotations at the side (boards B and D of
-// tutti, 2026-10-10).
+// The comment's popover beside its target and the list of the page's annotations at the side (ADR-0001).
 
 import { minuteOf, onMac, shortVersion } from "./address";
 import { briefOf } from "./describe";

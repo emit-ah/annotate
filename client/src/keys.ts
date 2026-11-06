@@ -1,4 +1,4 @@
-// What a key does while the mode is on or off (FR-ANN-001 and 002 of tutti): the shortcut switches it, Escape goes
+// What a key does while the mode is on or off (ADR-0001): the shortcut switches it, Escape goes
 // back, Enter or A pins what the keyboard picked, the arrows move the pick, and Tab, scrolling and the browser's own
 // shortcuts still work. The page's own elements get no key while the mode is on.
 
